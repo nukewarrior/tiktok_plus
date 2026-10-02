@@ -9,6 +9,9 @@
   #results { white-space: pre-wrap; }
   video { position: fixed; top: 12px; right: 12px; width: 200px; height: 80px; }
   #open-comments { position: fixed; top: 100px; right: 12px; }
+  #fullscreen { position: fixed; top: 132px; right: 12px; }
+  #next-video { position: fixed; top: 164px; right: 12px; }
+  #previous-video { position: fixed; top: 196px; right: 12px; }
 </style>
 <h1>TikTok Plus 评论翻译测试</h1>
 <p>自动检查，使用模拟请求，不连接 Google。刷新可重新运行。</p>
@@ -18,10 +21,22 @@
 </div>
 <video></video>
 <button data-e2e="comment-icon" id="open-comments">评论区</button>
+<button data-e2e="cinema-mode-entry" id="fullscreen">全屏</button>
+<button aria-label="Next" id="next-video">下一个</button>
+<button aria-label="Previous" id="previous-video">上一个</button>
 <textarea aria-label="评论输入框"></textarea>
 <script>
   const requests = [];
   window.GM_xmlhttpRequest = request => { requests.push(request); };
+  // Privileged userscripts expose a wrapped window that cannot be used as UIEvent.view.
+  const NativeMouseEvent = MouseEvent;
+  window.MouseEvent = class extends NativeMouseEvent {
+    constructor(type, options = {}) {
+      const init = { ...options };
+      if (init.view === window) init.view = new Proxy(window, {});
+      super(type, init);
+    }
+  };
 </script>
 <script src="../tiktok_plus.js"></script>
 <script>
@@ -186,6 +201,18 @@
       check("X 仍打开评论区", commentClicks === 1);
       key(button, "KeyX", "x");
       check("翻译按钮聚焦时其他快捷键仍可用", commentClicks === 2);
+      let fullscreenClicks = 0;
+      document.querySelector("#fullscreen").addEventListener("click", () => fullscreenClicks++);
+      key(document.body, "KeyF", "f");
+      key(document.body, "KeyH", "h");
+      check("沙箱环境下 F / H 仍切换全屏", fullscreenClicks === 2);
+      let nextClicks = 0;
+      let previousClicks = 0;
+      document.querySelector("#next-video").addEventListener("click", () => nextClicks++);
+      document.querySelector("#previous-video").addEventListener("click", () => previousClicks++);
+      key(document.body, "ArrowDown", "ArrowDown");
+      key(document.body, "ArrowUp", "ArrowUp");
+      check("沙箱环境下上下方向键仍切换视频", nextClicks === 1 && previousClicks === 1);
       let copied = "";
       Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async text => { copied = text; } } });
       key(document.body, "KeyV", "v");

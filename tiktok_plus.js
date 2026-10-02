@@ -2,7 +2,7 @@
 // @name         TikTok Plus
 // @name:zh-CN   TikTok Plus
 // @namespace    https://github.com/nukewarrior/tiktok_plus
-// @version      1.2.0
+// @version      1.2.1
 // @description  Keyboard shortcuts and on-demand comment translation for TikTok.
 // @description:zh-CN  为 TikTok 添加键盘快捷键和评论逐条翻译。
 // @author       nukewarrior
@@ -16,7 +16,7 @@
 (function () {
   "use strict";
 
-  const SCRIPT_VERSION = "1.2.0";
+  const SCRIPT_VERSION = "1.2.1";
   const SEEK_SECONDS = 5;
   const COMMENT_SELECTOR = '[data-e2e="comment-level-1"], [data-e2e="comment-level-2"]';
   const commentStates = new WeakMap();
@@ -555,10 +555,11 @@
   function clickElement(element) {
     if (!element) return false;
     const clickable = element.closest("button, a, [role='button'], [tabindex]") || element;
-    clickable.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, cancelable: true, view: window }));
-    clickable.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window }));
-    clickable.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, view: window }));
-    clickable.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }));
+    // The userscript sandbox's window wrapper is not a valid UIEvent.view.
+    clickable.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, cancelable: true }));
+    clickable.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
+    clickable.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true }));
+    clickable.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
     return true;
   }
 
