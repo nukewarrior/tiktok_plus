@@ -2,7 +2,7 @@
 // @name         TikTok Plus
 // @name:zh-CN   TikTok Plus
 // @namespace    https://github.com/nukewarrior/tiktok_plus
-// @version      1.1.1
+// @version      1.1.2
 // @description  Keyboard shortcuts for TikTok playback, interaction, search, and fullscreen modes.
 // @description:zh-CN  为 TikTok 添加键盘快捷键：播放控制、互动操作、搜索聚焦和快捷键帮助面板。
 // @author       nukewarrior
@@ -15,7 +15,7 @@
 (function () {
   "use strict";
 
-  const SCRIPT_VERSION = "1.1.1";
+  const SCRIPT_VERSION = "1.1.2";
   const SEEK_SECONDS = 5;
   const SHORTCUT_GROUPS = [
     {
@@ -337,7 +337,13 @@
 
   function getCurrentVideo() {
     return [...document.querySelectorAll("video")]
-      .filter(isVisible)
+      .filter((video) => {
+        const style = window.getComputedStyle(video);
+        const rect = video.getBoundingClientRect();
+        return style.visibility !== "hidden" && style.display !== "none" &&
+          rect.width > 1 && rect.height > 1 && rect.bottom > 0 && rect.right > 0 &&
+          rect.top < innerHeight && rect.left < innerWidth;
+      })
       .sort((a, b) => visibleScore(b) - visibleScore(a))[0] || null;
   }
 
