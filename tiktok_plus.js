@@ -2,21 +2,24 @@
 // @name         TikTok Plus
 // @name:zh-CN   TikTok Plus
 // @namespace    https://github.com/nukewarrior/tiktok_plus
-// @version      1.1.4
-// @description  Keyboard shortcuts for TikTok playback, interaction, search, and fullscreen modes.
-// @description:zh-CN  为 TikTok 添加键盘快捷键：播放控制、互动操作、搜索聚焦和快捷键帮助面板。
+// @version      1.2.0
+// @description  Keyboard shortcuts and on-demand comment translation for TikTok.
+// @description:zh-CN  为 TikTok 添加键盘快捷键和评论逐条翻译。
 // @author       nukewarrior
 // @license      MIT
 // @match        https://www.tiktok.com/*
 // @run-at       document-idle
-// @grant        none
+// @grant        GM_xmlhttpRequest
+// @connect      translate.googleapis.com
 // ==/UserScript==
 
 (function () {
   "use strict";
 
-  const SCRIPT_VERSION = "1.1.4";
+  const SCRIPT_VERSION = "1.2.0";
   const SEEK_SECONDS = 5;
+  const COMMENT_SELECTOR = '[data-e2e="comment-level-1"], [data-e2e="comment-level-2"]';
+  const commentStates = new WeakMap();
   const SHORTCUT_GROUPS = [
     {
       title: "播放控制",
@@ -51,6 +54,48 @@
 
 
   const css = `
+    .tiktok-plus-original-hidden {
+      display: none !important;
+    }
+
+    .tiktok-plus-comment-translation {
+      display: block;
+      color: var(--ui-text-1, inherit);
+      font-size: 15px;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+
+    .tiktok-plus-comment-translation[hidden] {
+      display: none;
+    }
+
+    .tiktok-plus-translate-button {
+      display: block;
+      min-height: 24px;
+      margin: 4px 0;
+      padding: 2px 0;
+      border: 0;
+      background: transparent;
+      color: var(--ui-text-2, inherit);
+      font: inherit;
+      font-size: 13px;
+      cursor: pointer;
+    }
+
+    .tiktok-plus-translate-button:hover {
+      text-decoration: underline;
+    }
+
+    .tiktok-plus-translate-button:focus-visible {
+      outline: 2px solid currentColor;
+      outline-offset: 2px;
+    }
+
+    .tiktok-plus-translate-button:disabled {
+      cursor: wait;
+    }
+
     .tiktok-plus-toast {
       position: fixed;
       left: 50%;
@@ -228,6 +273,146 @@
     node._tiktokPlusTimer = setTimeout(() => {
       node.classList.remove("is-visible");
     }, 1300);
+  }
+
+  function translateCommentText(text) {
+    const query = new URLSearchParams({ client: "gtx", sl: "auto", tl: "zh-CN", dt: "t", q: text });
+    return new Promise((resolve, reject) => {
+      GM_xmlhttpRequest({
+        method: "GET",
+        url: `https://translate.googleapis.com/translate_a/single?${query}`,
+        anonymous: true,
+        timeout: 15000,
+        onload(response) {
+          try {
+            if (response.status !== 200) throw new Error(`Translation HTTP ${response.status}`);
+            const payload = JSON.parse(response.responseText);
+            const segments = payload?.[0];
+            if (!Array.isArray(payload) || !Array.isArray(segments) || !segments.length ||
+                segments.some((segment) => !Array.isArray(segment) || typeof segment[0] !== "string")) {
+              throw new Error("Invalid translation response");
+            }
+            const translation = segments.map((segment) => segment[0]).join("");
+            if (!translation.trim()) throw new Error("Empty translation response");
+            resolve(translation);
+          } catch (error) {
+            reject(error);
+          }
+        },
+        onerror: () => reject(new Error("Translation network error")),
+        ontimeout: () => reject(new Error("Translation timeout")),
+        onabort: () => reject(new Error("Translation aborted")),
+      });
+    });
+  }
+
+  function commentIdentity(source) {
+    const author = source.parentElement?.querySelector('[data-e2e^="comment-username"] a[href]');
+    return JSON.stringify([location.href, author?.getAttribute("href"), source.innerHTML]);
+  }
+
+  function removeCommentTranslation(source) {
+    const state = commentStates.get(source);
+    if (!state) return;
+    commentStates.delete(source);
+    source.classList.remove("tiktok-plus-original-hidden");
+    state.controls.remove();
+  }
+
+  function syncCommentTranslation(source) {
+    const identity = commentIdentity(source);
+    const previous = commentStates.get(source);
+    if (previous && source.isConnected && source.matches(COMMENT_SELECTOR) &&
+        previous.identity === identity && previous.controls.parentElement === source.parentElement) return;
+    removeCommentTranslation(source);
+    const text = source.textContent.trim();
+    if (!source.isConnected || !source.matches(COMMENT_SELECTOR) || !/\p{L}/u.test(text)) return;
+
+    const controls = document.createElement("div");
+    controls.className = "tiktok-plus-comment-controls";
+    const translation = document.createElement("span");
+    translation.className = "tiktok-plus-comment-translation";
+    translation.lang = "zh-CN";
+    translation.hidden = true;
+    const button = document.createElement("button");
+    button.className = "tiktok-plus-translate-button";
+    button.type = "button";
+    button.textContent = "翻译";
+    button.title = "使用 Google 翻译为简体中文";
+    button.setAttribute("aria-live", "polite");
+    controls.append(translation, button);
+    source.after(controls);
+    const state = { identity, controls, pending: false };
+    commentStates.set(source, state);
+
+    function isCurrent() {
+      return source.isConnected && source.matches(COMMENT_SELECTOR) &&
+        controls.parentElement === source.parentElement &&
+        commentStates.get(source) === state && commentIdentity(source) === identity;
+    }
+
+    function toggleTranslation() {
+      translation.hidden = !translation.hidden;
+      source.classList.toggle("tiktok-plus-original-hidden", !translation.hidden);
+      button.textContent = translation.hidden ? "查看译文" : "查看原文";
+    }
+
+    button.addEventListener("click", async (event) => {
+      event.stopPropagation();
+      if (!isCurrent()) {
+        syncCommentTranslation(source);
+        return;
+      }
+      if (state.pending) return;
+      if (translation.textContent) {
+        toggleTranslation();
+        return;
+      }
+      state.pending = true;
+      button.disabled = true;
+      button.textContent = "翻译中…";
+      try {
+        const result = await translateCommentText(text);
+        if (!isCurrent()) return;
+        translation.textContent = result;
+        toggleTranslation();
+      } catch (error) {
+        if (isCurrent()) button.textContent = "翻译失败，重试";
+      } finally {
+        state.pending = false;
+        if (isCurrent()) button.disabled = false;
+      }
+    });
+  }
+
+  function observeCommentTranslations() {
+    function visit(root, callback) {
+      if (!(root instanceof Element)) return;
+      if (root.matches(COMMENT_SELECTOR) || commentStates.has(root)) callback(root);
+      root.querySelectorAll(COMMENT_SELECTOR).forEach(callback);
+    }
+
+    visit(document.body, syncCommentTranslation);
+    new MutationObserver((records) => {
+      const sources = new Set();
+      for (const record of records) {
+        const target = record.target instanceof Element ? record.target : record.target.parentElement;
+        if (target?.closest(".tiktok-plus-comment-controls")) continue;
+        for (const removed of record.removedNodes) visit(removed, removeCommentTranslation);
+        const source = target?.closest(COMMENT_SELECTOR);
+        if (source) sources.add(source);
+        const author = target?.closest('[data-e2e^="comment-username"]');
+        if (author) visit(author.parentElement?.parentElement, (node) => sources.add(node));
+        visit(target, (node) => sources.add(node));
+      }
+      sources.forEach(syncCommentTranslation);
+    }).observe(document.body, {
+      childList: true,
+      characterData: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ["data-e2e", "href"],
+    });
   }
 
   function escapeHtml(value) {
@@ -732,6 +917,9 @@
       return;
     }
 
+    // Space and Enter must retain native button activation for comment translation.
+    if ((code === "Space" || code === "Enter") && event.target instanceof Element &&
+        event.target.closest(".tiktok-plus-translate-button")) return;
     if (editable) return;
 
     const actions = {
@@ -765,5 +953,6 @@
   }
 
   installStyle();
+  observeCommentTranslations();
   document.addEventListener("keydown", onKeyDown, true);
 })();

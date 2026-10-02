@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<title>TikTok Plus 评论翻译测试</title>
+<style>
+  :root { color-scheme: light dark; --ui-text-1: CanvasText; --ui-text-2: CanvasText; }
+  body { max-width: 900px; margin: 32px auto; padding: 0 20px; font: 15px/1.6 system-ui; }
+  article { padding: 12px; margin: 8px 0; border: 1px solid GrayText; }
+  #results { white-space: pre-wrap; }
+  video { position: fixed; top: 12px; right: 12px; width: 200px; height: 80px; }
+  #open-comments { position: fixed; top: 100px; right: 12px; }
+</style>
+<h1>TikTok Plus 评论翻译测试</h1>
+<p>自动检查，使用模拟请求，不连接 Google。刷新可重新运行。</p>
+<pre id="results" role="status">运行中…</pre>
+<div id="comments">
+  <article id="initial"><div data-e2e="comment-username-1"><a href="/@example">Example</a></div><span data-e2e="comment-level-1">Hello <a href="/@friend">@friend</a> 😭</span><img alt="照片"><div><button data-e2e="comment-reply-1">回复</button></div></article>
+</div>
+<video></video>
+<button data-e2e="comment-icon" id="open-comments">评论区</button>
+<textarea aria-label="评论输入框"></textarea>
+<script>
+  const requests = [];
+  window.GM_xmlhttpRequest = request => { requests.push(request); };
+</script>
+<script src="../tiktok_plus.js"></script>
+<script>
+  (async () => {
+    const output = document.querySelector("#results");
+    const log = [];
+    function check(name, condition) {
+      if (!condition) throw new Error(name);
+      log.push(`✓ ${name}`);
+      output.textContent = log.join("\n");
+    }
+    const flush = () => new Promise(resolve => setTimeout(resolve, 0));
+    const buttonFor = source => source.parentElement.querySelector(".tiktok-plus-translate-button");
+    const translated = source => source.parentElement.querySelector(".tiktok-plus-comment-translation");
+    const respond = (request, segments = ["你好"], status = 200) => request.onload({
+      status, responseText: JSON.stringify([segments.map(text => [text])]),
+    });
+    function addComment(text, level = 1) {
+      const row = document.createElement("article");
+      const author = document.createElement("div");
+      author.dataset.e2e = `comment-username-${level}`;
+      const link = document.createElement("a");
+      link.href = "/@example";
+      link.textContent = "Example";
+      author.append(link);
+      const source = document.createElement("span");
+      source.dataset.e2e = `comment-level-${level}`;
+      source.textContent = text;
+      row.append(author, source);
+      document.querySelector("#comments").append(row);
+      return source;
+    }
+    function key(target, code, key) {
+      const event = new KeyboardEvent("keydown", { code, key, bubbles: true, cancelable: true });
+      target.dispatchEvent(event);
+      return event;
+    }
+    try {
+      const initial = document.querySelector('#initial [data-e2e="comment-level-1"]');
+      const originalLink = initial.querySelector("a");
+      const button = buttonFor(initial);
+      check("初始主评论只有一个翻译入口", !!button && initial.parentElement.querySelectorAll(".tiktok-plus-translate-button").length === 1);
+      check("安装时不自动发送请求", requests.length === 0);
+      button.click();
+      button.click();
+      check("加载状态和重复点击去重", requests.length === 1 && button.disabled && button.textContent === "翻译中…");
+      const request = requests[0];
+      const url = new URL(request.url);
+      check("固定目标语言、准确编码正文、匿名及超时设置", url.origin === "https://translate.googleapis.com" &&
+        url.pathname === "/translate_a/single" && url.searchParams.get("client") === "gtx" &&
+        url.searchParams.get("sl") === "auto" && url.searchParams.get("tl") === "zh-CN" &&
+        url.searchParams.get("dt") === "t" && url.searchParams.get("q") === initial.textContent.trim() &&
+        request.anonymous === true && request.timeout === 15000);
+      respond(request, ["你好", " @friend 😭"]);
+      await flush();
+      check("拼接分段并替换正文", translated(initial).textContent === "你好 @friend 😭" &&
+        !translated(initial).hidden && getComputedStyle(initial).display === "none" && button.textContent === "查看原文" && !button.disabled);
+      button.click();
+      check("恢复原文及原来的链接节点", getComputedStyle(initial).display !== "none" &&
+        translated(initial).hidden && initial.querySelector("a") === originalLink && button.textContent === "查看译文");
+      button.click();
+      await flush();
+      check("再次查看译文不重复请求或入口", requests.length === 1 && !translated(initial).hidden &&
+        initial.parentElement.querySelectorAll(".tiktok-plus-translate-button").length === 1);
+      check("图片和回复操作保留", !!initial.parentElement.querySelector("img") && !!initial.parentElement.querySelector('[data-e2e="comment-reply-1"]'));
+
+      const reply = addComment("これはテストです & # + ?", 2);
+      const emoji = addComment("😭❤️👍 123 !");
+      const image = addComment("");
+      image.append(document.createElement("img"));
+      const unrelated = document.createElement("p");
+      unrelated.textContent = "Unrelated page text";
+      document.body.append(unrelated);
+      await flush();
+      check("动态回复可翻译，纯表情、图片及非评论不添加入口", !!buttonFor(reply) && !buttonFor(emoji) && !buttonFor(image) && !unrelated.nextElementSibling?.classList.contains("tiktok-plus-comment-controls"));
+      buttonFor(reply).click();
+      check("日文和特殊字符编码", new URL(requests.at(-1).url).searchParams.get("q") === reply.textContent);
+      respond(requests.at(-1), ['<img src=x onerror="alert(1)">']);
+      await flush();
+      check("译文只作为文本展示", translated(reply).children.length === 0 && translated(reply).textContent.startsWith("<img"));
+
+      const failure = addComment("that's so depressing omfg");
+      await flush();
+      const failureButton = buttonFor(failure);
+      for (const fail of [
+        request => respond(request, ["失败"], 429),
+        request => request.onload({ status: 200, responseText: "not json" }),
+        request => request.onload({ status: 200, responseText: JSON.stringify([[[42]]]) }),
+        request => request.onload({ status: 200, responseText: JSON.stringify({ 0: [["invalid"]] }) }),
+        request => respond(request, [""]),
+        request => request.ontimeout(),
+        request => request.onerror(),
+        request => request.onabort(),
+      ]) {
+        failureButton.click();
+        const count = requests.length;
+        fail(requests.at(-1));
+        await flush();
+        check(`失败保留原文、允许手动重试 ${count}`, !failure.classList.contains("tiktok-plus-original-hidden") &&
+          translated(failure).hidden && failureButton.textContent === "翻译失败，重试" && !failureButton.disabled && requests.length === count);
+      }
+      failureButton.click();
+      respond(requests.at(-1), ["真让人沮丧"]);
+      await flush();
+      check("失败后可重试成功", failureButton.textContent === "查看原文");
+
+      const reused = addComment("Old comment");
+      await flush();
+      buttonFor(reused).click();
+      const stale = requests.at(-1);
+      reused.firstChild.data = "New comment";
+      await flush();
+      respond(stale, ["旧评论"]);
+      await flush();
+      check("文本节点复用丢弃旧响应", buttonFor(reused).textContent === "翻译" && translated(reused).hidden);
+      buttonFor(reused).click();
+      respond(requests.at(-1), ["新评论"]);
+      await flush();
+      reused.textContent = "Third comment";
+      await flush();
+      check("已翻译节点内容变化恢复原文和新入口", !reused.classList.contains("tiktok-plus-original-hidden") && buttonFor(reused).textContent === "翻译");
+      buttonFor(reused).click();
+      const oldAuthorRequest = requests.at(-1);
+      reused.parentElement.querySelector("a").href = "/@different";
+      await flush();
+      respond(oldAuthorRequest, ["其他作者的旧响应"]);
+      await flush();
+      check("作者变化丢弃旧响应", buttonFor(reused).textContent === "翻译" && translated(reused).hidden);
+
+      buttonFor(reused).click();
+      const detachedRequest = requests.at(-1);
+      const row = reused.parentElement;
+      row.remove();
+      document.querySelector("#comments").append(row);
+      await flush();
+      respond(detachedRequest, ["已移除节点的响应"]);
+      await flush();
+      check("关闭重开复用节点丢弃旧响应且不重复入口", translated(reused).hidden && buttonFor(reused).textContent === "翻译" &&
+        row.querySelectorAll(".tiktok-plus-translate-button").length === 1);
+      reused.dataset.e2e = "not-a-comment";
+      await flush();
+      check("失去评论标识时清理入口", !buttonFor(reused));
+
+      const replaced = addComment("Replace this body");
+      await flush();
+      const replacedRow = replaced.parentElement;
+      const newSource = replaced.cloneNode(true);
+      replaced.replaceWith(newSource);
+      await flush();
+      check("正文节点替换时清理旧入口", replacedRow.querySelectorAll(".tiktok-plus-translate-button").length === 1 && !!buttonFor(newSource));
+
+      check("翻译按钮保留原生 Space 和 Enter 操作", !key(button, "Space", " ").defaultPrevented && !key(button, "Enter", "Enter").defaultPrevented);
+      check("评论输入框不触发播放快捷键", !key(document.querySelector("textarea"), "Space", " ").defaultPrevented);
+      const video = document.querySelector("video");
+      let playCalls = 0;
+      video.play = () => { playCalls++; return Promise.resolve(); };
+      key(document.body, "Space", " ");
+      check("页面 Space 仍触发播放", playCalls === 1);
+      let commentClicks = 0;
+      document.querySelector("#open-comments").addEventListener("click", () => commentClicks++);
+      key(document.body, "KeyX", "x");
+      check("X 仍打开评论区", commentClicks === 1);
+      key(button, "KeyX", "x");
+      check("翻译按钮聚焦时其他快捷键仍可用", commentClicks === 2);
+      let copied = "";
+      Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async text => { copied = text; } } });
+      key(document.body, "KeyV", "v");
+      await flush();
+      check("V 仍复制页面标题和链接", copied === `${document.title}\n${location.href}`);
+      output.textContent = `通过 ${log.length} 项检查\n\n${log.join("\n")}`;
+    } catch (error) {
+      output.textContent = `失败：${error.message}\n\n${log.join("\n")}`;
+      console.error(error);
+    }
+  })();
+</script>
+</html>
