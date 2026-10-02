@@ -12,6 +12,8 @@
   #fullscreen { position: fixed; top: 132px; right: 12px; }
   #next-video { position: fixed; top: 164px; right: 12px; }
   #previous-video { position: fixed; top: 196px; right: 12px; }
+  #bulk-panel { position: fixed; top: 250px; right: 12px; width: 420px; max-height: 480px; overflow: auto; background: Canvas; border: 1px solid GrayText; }
+  #bulk-panel [class="DivCommentHeader"] { display: flex; align-items: center; padding: 8px; }
 </style>
 <h1>TikTok Plus 评论翻译测试</h1>
 <p>自动检查，使用模拟请求，不连接 Google。刷新可重新运行。</p>
@@ -19,6 +21,10 @@
 <div id="comments">
   <article id="initial"><div data-e2e="comment-username-1"><a href="/@example">Example</a></div><span data-e2e="comment-level-1">Hello <a href="/@friend">@friend</a> 😭</span><img alt="照片"><div><button data-e2e="comment-reply-1">回复</button></div></article>
 </div>
+<section id="bulk-panel" class="SectionCommentSidebarContainer" hidden>
+  <div class="DivCommentHeader"><span>评论</span><div class="DivCloseButtonWrapper"><button aria-label="exit">×</button></div></div>
+  <div id="bulk-comments"></div>
+</section>
 <video></video>
 <button data-e2e="comment-icon" id="open-comments">评论区</button>
 <button data-e2e="cinema-mode-entry" id="fullscreen">全屏</button>
@@ -27,7 +33,7 @@
 <textarea aria-label="评论输入框"></textarea>
 <script>
   const requests = [];
-  window.GM_xmlhttpRequest = request => { requests.push(request); };
+  window.GM_xmlhttpRequest = request => { request.startedAt = performance.now(); requests.push(request); };
   // Privileged userscripts expose a wrapped window that cannot be used as UIEvent.view.
   const NativeMouseEvent = MouseEvent;
   window.MouseEvent = class extends NativeMouseEvent {
@@ -38,7 +44,7 @@
     }
   };
 </script>
-<script src="../tiktok_plus.js"></script>
+<script src="../tiktok_plus.js?v=1.3.0"></script>
 <script>
   (async () => {
     const output = document.querySelector("#results");
@@ -49,12 +55,20 @@
       output.textContent = log.join("\n");
     }
     const flush = () => new Promise(resolve => setTimeout(resolve, 0));
+    const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
+    async function until(condition) {
+      const deadline = performance.now() + 5000;
+      while (!condition()) {
+        if (performance.now() > deadline) throw new Error("等待状态超时");
+        await wait(20);
+      }
+    }
     const buttonFor = source => source.parentElement.querySelector(".tiktok-plus-translate-button");
     const translated = source => source.parentElement.querySelector(".tiktok-plus-comment-translation");
     const respond = (request, segments = ["你好"], status = 200) => request.onload({
       status, responseText: JSON.stringify([segments.map(text => [text])]),
     });
-    function addComment(text, level = 1) {
+    function addComment(text, level = 1, container = document.querySelector("#comments")) {
       const row = document.createElement("article");
       const author = document.createElement("div");
       author.dataset.e2e = `comment-username-${level}`;
@@ -66,7 +80,7 @@
       source.dataset.e2e = `comment-level-${level}`;
       source.textContent = text;
       row.append(author, source);
-      document.querySelector("#comments").append(row);
+      container.append(row);
       return source;
     }
     function key(target, code, key) {
@@ -174,7 +188,7 @@
       await flush();
       respond(detachedRequest, ["已移除节点的响应"]);
       await flush();
-      check("关闭重开复用节点丢弃旧响应且不重复入口", translated(reused).hidden && buttonFor(reused).textContent === "翻译" &&
+      check("同身份节点重建复用在途结果且不重复入口", !translated(reused).hidden && buttonFor(reused).textContent === "查看原文" &&
         row.querySelectorAll(".tiktok-plus-translate-button").length === 1);
       reused.dataset.e2e = "not-a-comment";
       await flush();
@@ -218,6 +232,216 @@
       key(document.body, "KeyV", "v");
       await flush();
       check("V 仍复制页面标题和链接", copied === `${document.title}\n${location.href}`);
+
+      const panel = document.querySelector("#bulk-panel");
+      const list = document.querySelector("#bulk-comments");
+      const bulkButton = () => panel.querySelector(".tiktok-plus-bulk-controls button");
+      const bulkStatus = () => panel.querySelector('[role="status"]').textContent;
+      const bulkComment = (text, level = 1) => addComment(text, level, list);
+      const first = bulkComment("Bulk first comment");
+      const second = bulkComment("バッチ翻訳テスト", 2);
+      const bulkEmoji = bulkComment("😂👍");
+      const outside = addComment("Outside the current comment panel");
+      panel.hidden = false;
+      await flush();
+      check("标题安装唯一总开关且默认关闭", !!bulkButton() && bulkButton().textContent === "翻译全部" && panel.querySelectorAll(".tiktok-plus-bulk-controls").length === 1);
+      check("总开关保留 Space / Enter 原生行为", !key(bulkButton(), "Space", " ").defaultPrevented && !key(bulkButton(), "Enter", "Enter").defaultPrevented);
+      const bulkStart = requests.length;
+      bulkButton().click();
+      await flush();
+      check("开启批量只发送首条且按钮可停止", requests.length === bulkStart + 1 && !bulkButton().disabled && bulkButton().textContent === "全部查看原文" && bulkStatus() === "翻译中…");
+      check("队列按主评论与回复的 DOM 顺序发送", new URL(requests.at(-1).url).searchParams.get("q") === first.textContent);
+      const firstRequest = requests.at(-1);
+      buttonFor(first).click();
+      check("批量在途请求与逐条点击去重", requests.length === bulkStart + 1);
+      const firstCompletedAt = performance.now();
+      respond(firstRequest, ["批量第一条"]);
+      await wait(100);
+      check("批量请求完成后不立即发送下一条", requests.length === bulkStart + 1);
+      await until(() => requests.length === bulkStart + 2);
+      check("请求间隔至少 300ms 且覆盖展开回复", requests.at(-1).startedAt - firstCompletedAt >= 295 && new URL(requests.at(-1).url).searchParams.get("q") === second.textContent);
+      respond(requests.at(-1), ["批量回复"]);
+      await until(() => bulkStatus() === "自动翻译已开启");
+      check("批量成功替换正文，跳过表情和面板外评论", !translated(first).hidden && !translated(second).hidden && !buttonFor(bulkEmoji) && buttonFor(outside).textContent === "翻译" && requests.length === bulkStart + 2);
+
+      buttonFor(first).click();
+      const originalRow = first.parentElement;
+      const replacementRow = originalRow.cloneNode(true);
+      replacementRow.querySelector(".tiktok-plus-comment-controls").remove();
+      originalRow.replaceWith(replacementRow);
+      const replacement = replacementRow.querySelector('[data-e2e="comment-level-1"]');
+      await flush();
+      await wait(550);
+      check("逐条原文偏好跨虚拟化节点替换保留", translated(replacement).hidden && buttonFor(replacement).textContent === "查看译文" && requests.length === bulkStart + 2);
+      buttonFor(replacement).click();
+      check("逐条手动查看译文复用缓存", !translated(replacement).hidden && requests.length === bulkStart + 2);
+
+      const dynamic = bulkComment("Bulk newly loaded comment");
+      const dynamicReply = bulkComment("Bulk newly expanded reply", 2);
+      await until(() => requests.length === bulkStart + 3);
+      respond(requests.at(-1), ["新增评论"]);
+      await until(() => requests.length === bulkStart + 4);
+      respond(requests.at(-1), ["新增回复"]);
+      await until(() => bulkStatus() === "自动翻译已开启");
+      check("新增主评论及展开回复自动接续", !translated(dynamic).hidden && !translated(dynamicReply).hidden);
+
+      const failed = bulkComment("Bulk failed comment");
+      const afterFailure = bulkComment("Bulk comment after failure");
+      await until(() => requests.length === bulkStart + 5);
+      requests.at(-1).ontimeout();
+      await until(() => requests.length === bulkStart + 6);
+      respond(requests.at(-1), ["失败后继续"]);
+      await until(() => bulkStatus() === "自动翻译已开启");
+      panel.hidden = true;
+      await flush();
+      panel.hidden = false;
+      await flush();
+      await wait(550);
+      check("单条失败继续队列，重开不自动重试", translated(failed).hidden && buttonFor(failed).textContent === "翻译失败，重试" && !translated(afterFailure).hidden && requests.length === bulkStart + 6);
+      buttonFor(failed).click();
+      respond(requests.at(-1), ["手动重试成功"]);
+      await flush();
+      check("批量失败支持逐条手动重试", !translated(failed).hidden);
+
+      const stopping = bulkComment("Bulk stop while pending");
+      const neverSent = bulkComment("Bulk queued but stopped");
+      const stopStart = requests.length;
+      await until(() => requests.length === stopStart + 1);
+      const late = requests.at(-1);
+      bulkButton().click();
+      respond(late, ["停止后的有效缓存"]);
+      await wait(550);
+      check("停止恢复全部原文并忽略迟到显示，清空未发送队列", bulkButton().textContent === "翻译全部" && [...list.querySelectorAll('[data-e2e^="comment-level-"]')].every(source => !source.classList.contains("tiktok-plus-original-hidden")) && translated(stopping).hidden && requests.length === stopStart + 1);
+      bulkButton().click();
+      await until(() => requests.length === stopStart + 2);
+      check("重新开启复用已有及迟到译文缓存", !translated(stopping).hidden && !translated(replacement).hidden && new URL(requests.at(-1).url).searchParams.get("q") === neverSent.textContent);
+      respond(requests.at(-1), ["重新开启翻译"]);
+      await until(() => bulkStatus() === "自动翻译已开启");
+
+      const closing = bulkComment("Bulk close while pending");
+      const closedQueue = bulkComment("Bulk waiting when closed");
+      const closeStart = requests.length;
+      await until(() => requests.length === closeStart + 1);
+      const closingRequest = requests.at(-1);
+      panel.remove();
+      await flush();
+      respond(closingRequest, ["关闭期间完成"]);
+      await wait(550);
+      check("关闭评论区暂停未发送任务", requests.length === closeStart + 1);
+      document.body.append(panel);
+      await until(() => requests.length === closeStart + 2);
+      check("同视频重开保持开启并复用已完成结果", bulkButton().textContent === "全部查看原文" && !translated(closing).hidden && new URL(requests.at(-1).url).searchParams.get("q") === closedQueue.textContent && panel.querySelectorAll(".tiktok-plus-bulk-controls").length === 1);
+      respond(requests.at(-1), ["重开继续"]);
+      await until(() => bulkStatus() === "自动翻译已开启");
+
+      const limited = bulkComment("Bulk rate limited comment");
+      bulkComment("Bulk should wait after 429");
+      const limitStart = requests.length;
+      await until(() => requests.length === limitStart + 1);
+      respond(requests.at(-1), ["限流"], 429);
+      await wait(550);
+      check("429 停止自动翻译并保留成功译文", bulkButton().textContent === "翻译全部" && bulkStatus() === "请求受限，已停止" && !translated(replacement).hidden && translated(limited).hidden && requests.length === limitStart + 1);
+      bulkButton().click();
+      await until(() => requests.length === limitStart + 2);
+      check("显式重启才重试失败条目", new URL(requests.at(-1).url).searchParams.get("q") === limited.textContent);
+      const oldVideoRequest = requests.at(-1);
+      const oldPath = location.pathname;
+      history.replaceState(null, "", "/@example/video/123456789");
+      await wait(550);
+      respond(oldVideoRequest, ["前一视频迟到结果"]);
+      await flush();
+      check("切换视频关闭开关并清空缓存，旧响应不串位", bulkButton().textContent === "翻译全部" && buttonFor(replacement).textContent === "翻译" && translated(limited).hidden && requests.length === limitStart + 2);
+      buttonFor(replacement).click();
+      check("新视频同正文仍发新请求", requests.length === limitStart + 3);
+      respond(requests.at(-1), ["新视频译文"]);
+      await flush();
+      history.replaceState(null, "", oldPath);
+
+      list.replaceChildren();
+      const hiddenPending = bulkComment("Bulk hidden panel request");
+      const hiddenQueued = bulkComment("Bulk hidden panel queue");
+      await flush();
+      const hiddenStart = requests.length;
+      bulkButton().click();
+      await until(() => requests.length === hiddenStart + 1);
+      const hiddenRequest = requests.at(-1);
+      panel.hidden = true;
+      await flush();
+      respond(hiddenRequest, ["隐藏期间缓存"]);
+      await wait(550);
+      check("隐藏而未卸载的评论区暂停队列", requests.length === hiddenStart + 1);
+      panel.hidden = false;
+      await until(() => requests.length === hiddenStart + 2);
+      check("隐藏后重开复用缓存并继续队列", !translated(hiddenPending).hidden && new URL(requests.at(-1).url).searchParams.get("q") === hiddenQueued.textContent);
+      respond(requests.at(-1), ["隐藏后继续"]);
+      await until(() => bulkStatus() === "自动翻译已开启");
+
+      const reusedPending = bulkComment("Bulk virtualized old body");
+      const reuseStart = requests.length;
+      await until(() => requests.length === reuseStart + 1);
+      const reusedRequest = requests.at(-1);
+      reusedPending.firstChild.data = "Bulk virtualized new body";
+      await flush();
+      respond(reusedRequest, ["不能显示的旧译文"]);
+      await until(() => requests.length === reuseStart + 2);
+      check("批量在途正文复用不串位且新正文重新入队", translated(reusedPending).hidden && new URL(requests.at(-1).url).searchParams.get("q") === "Bulk virtualized new body");
+      respond(requests.at(-1), ["新的正文译文"]);
+      await until(() => bulkStatus() === "自动翻译已开启");
+
+      const sharedStart = requests.length;
+      bulkComment("Bulk automatic request before manual action");
+      const manualDuringBulk = bulkComment("Bulk manual and automatic share request");
+      await flush();
+      const automaticRequest = requests.at(-1);
+      buttonFor(manualDuringBulk).click();
+      respond(requests.at(-1), ["共享请求译文"]);
+      respond(automaticRequest, ["先前批量请求译文"]);
+      await until(() => bulkStatus() === "自动翻译已开启");
+      check("手动翻译队列中的条目后批量不重复请求", requests.length === sharedStart + 2 && !translated(manualDuringBulk).hidden);
+
+      const fastSwitch = bulkComment("Bulk response before video polling");
+      const fastStart = requests.length;
+      await until(() => requests.length === fastStart + 1);
+      history.replaceState(null, "", "/@example/video/987654321");
+      respond(requests.at(-1), ["不能显示到新视频"]);
+      await flush();
+      check("响应早于轮询时仍核对视频身份", bulkButton().textContent === "翻译全部" && translated(fastSwitch).hidden && buttonFor(fastSwitch).textContent === "翻译");
+      history.replaceState(null, "", oldPath);
+      const mediaCard = document.createElement("div");
+      mediaCard.id = "media-card-test-a";
+      video.before(mediaCard);
+      mediaCard.append(video);
+      list.replaceChildren();
+      const fallback = bulkComment("Bulk media card identity fallback");
+      await flush();
+      const fallbackStart = requests.length;
+      bulkButton().click();
+      await until(() => requests.length === fallbackStart + 1);
+      const fallbackRequest = requests.at(-1);
+      mediaCard.id = "media-card-test-b";
+      await wait(550);
+      respond(fallbackRequest, ["旧媒体卡片译文"]);
+      await flush();
+      check("没有视频 URL 时媒体卡片切换也清空状态", bulkButton().textContent === "翻译全部" && translated(fallback).hidden && buttonFor(fallback).textContent === "翻译");
+
+      const oldHeader = panel.querySelector(".DivCommentHeader");
+      const newHeader = oldHeader.cloneNode(true);
+      newHeader.querySelector(".tiktok-plus-bulk-controls").remove();
+      oldHeader.replaceWith(newHeader);
+      await flush();
+      check("标题重建后总开关仍唯一且位置正确", panel.querySelectorAll(".tiktok-plus-bulk-controls").length === 1 && bulkButton().parentElement.nextElementSibling.className === "DivCloseButtonWrapper");
+      const closeWrapper = panel.querySelector(".DivCloseButtonWrapper");
+      closeWrapper.remove();
+      await flush();
+      check("关闭控件锚点缺失时移除总开关", !bulkButton() && !!buttonFor(fallback));
+      newHeader.append(closeWrapper);
+      await flush();
+      const missingHeader = panel.querySelector(".DivCommentHeader");
+      missingHeader.remove();
+      await flush();
+      check("标题锚点缺失时逐条翻译仍可用", !!buttonFor(fallback) && !bulkButton());
+      panel.prepend(missingHeader);
+      await flush();
       output.textContent = `通过 ${log.length} 项检查\n\n${log.join("\n")}`;
     } catch (error) {
       output.textContent = `失败：${error.message}\n\n${log.join("\n")}`;

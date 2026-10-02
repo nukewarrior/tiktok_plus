@@ -2,9 +2,9 @@
 // @name         TikTok Plus
 // @name:zh-CN   TikTok Plus
 // @namespace    https://github.com/nukewarrior/tiktok_plus
-// @version      1.2.1
-// @description  Keyboard shortcuts and on-demand comment translation for TikTok.
-// @description:zh-CN  为 TikTok 添加键盘快捷键和评论逐条翻译。
+// @version      1.3.0
+// @description  Keyboard shortcuts, individual and continuous comment translation for TikTok.
+// @description:zh-CN  为 TikTok 添加键盘快捷键、评论逐条翻译和翻译全部。
 // @author       nukewarrior
 // @license      MIT
 // @match        https://www.tiktok.com/*
@@ -16,10 +16,20 @@
 (function () {
   "use strict";
 
-  const SCRIPT_VERSION = "1.2.1";
+  const SCRIPT_VERSION = "1.3.0";
   const SEEK_SECONDS = 5;
   const COMMENT_SELECTOR = '[data-e2e="comment-level-1"], [data-e2e="comment-level-2"]';
   const commentStates = new WeakMap();
+  const COMMENT_PANEL_SELECTOR = 'section[class*="SectionCommentSidebarContainer"]';
+  const commentCache = new Map();
+  const bulkQueue = new Set();
+  let translationVideoKey = null;
+  let bulkEnabled = false;
+  let bulkPanel = null;
+  let bulkControls = null;
+  let bulkRunning = false;
+  let bulkTimer = null;
+  let bulkRateLimited = false;
   const SHORTCUT_GROUPS = [
     {
       title: "播放控制",
@@ -94,6 +104,23 @@
 
     .tiktok-plus-translate-button:disabled {
       cursor: wait;
+    }
+
+    .tiktok-plus-bulk-controls {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: 2px 8px;
+      margin: 0 12px 0 auto;
+      color: var(--ui-text-2, inherit);
+      font-size: 12px;
+    }
+
+    .tiktok-plus-bulk-controls button {
+      flex-shrink: 0;
+      margin: 0;
+      padding: 2px 4px;
     }
 
     .tiktok-plus-toast {
@@ -285,7 +312,11 @@
         timeout: 15000,
         onload(response) {
           try {
-            if (response.status !== 200) throw new Error(`Translation HTTP ${response.status}`);
+            if (response.status !== 200) {
+              const error = new Error(`Translation HTTP ${response.status}`);
+              error.status = response.status;
+              throw error;
+            }
             const payload = JSON.parse(response.responseText);
             const segments = payload?.[0];
             if (!Array.isArray(payload) || !Array.isArray(segments) || !segments.length ||
@@ -306,9 +337,91 @@
     });
   }
 
+  function getTranslationVideoKey() {
+    return location.pathname.match(/\/video\/(\d+)/)?.[1] ||
+      getCurrentVideo()?.closest('[id^="media-card-"]')?.id || location.pathname;
+  }
+
+  function syncTranslationVideo() {
+    const key = getTranslationVideoKey();
+    if (translationVideoKey === key) return false;
+    const changed = translationVideoKey !== null;
+    translationVideoKey = key;
+    if (changed) {
+      stopBulkTranslation(false);
+      bulkRateLimited = false;
+      commentCache.clear();
+      document.querySelectorAll(COMMENT_SELECTOR).forEach(removeCommentTranslation);
+    }
+    return changed;
+  }
+
   function commentIdentity(source) {
     const author = source.parentElement?.querySelector('[data-e2e^="comment-username"] a[href]');
-    return JSON.stringify([location.href, author?.getAttribute("href"), source.innerHTML]);
+    return JSON.stringify([translationVideoKey, author?.getAttribute("href"), source.innerHTML]);
+  }
+
+  function isCurrentComment(state) {
+    syncTranslationVideo();
+    return state.source.isConnected && state.source.matches(COMMENT_SELECTOR) &&
+      state.controls.parentElement === state.source.parentElement &&
+      commentStates.get(state.source) === state &&
+      commentCache.get(state.identity) === state.entry && commentIdentity(state.source) === state.identity;
+  }
+
+  function renderCommentTranslation(state) {
+    if (!isCurrentComment(state)) return;
+    const { source, entry, translation, button } = state;
+    const show = Boolean(entry.translation && !entry.original);
+    if (translation.textContent !== entry.translation) translation.textContent = entry.translation;
+    translation.hidden = !show;
+    if (source.classList.contains("tiktok-plus-original-hidden") !== show) {
+      source.classList.toggle("tiktok-plus-original-hidden", show);
+    }
+    button.disabled = Boolean(entry.pending);
+    const label = entry.pending ? "翻译中…" : entry.translation ? (show ? "查看原文" : "查看译文") :
+      entry.failed ? "翻译失败，重试" : "翻译";
+    if (button.textContent !== label) button.textContent = label;
+  }
+
+  function showCommentTranslation(state, show) {
+    state.entry.original = !show;
+    renderCommentTranslation(state);
+  }
+
+  function requestCommentTranslation(state) {
+    if (!isCurrentComment(state)) return Promise.resolve();
+    const entry = state.entry;
+    if (entry.pending) return entry.pending;
+    if (entry.translation) {
+      showCommentTranslation(state, true);
+      return Promise.resolve();
+    }
+    entry.original = false;
+    entry.failed = false;
+    entry.pending = translateCommentText(state.source.textContent.trim()).then((result) => {
+      syncTranslationVideo();
+      if (commentCache.get(state.identity) === entry) entry.translation = result;
+    }).catch((error) => {
+      syncTranslationVideo();
+      if (commentCache.get(state.identity) !== entry) return;
+      entry.failed = true;
+      if (error.status === 429 && bulkEnabled) {
+        stopBulkTranslation(false);
+        bulkRateLimited = true;
+        toast("请求受限，已停止自动翻译");
+      }
+    }).finally(() => {
+      entry.pending = null;
+      // Virtualized rows may have been replaced while their shared request was running.
+      document.querySelectorAll(COMMENT_SELECTOR).forEach((source) => {
+        const current = commentStates.get(source);
+        if (current?.entry === entry) renderCommentTranslation(current);
+      });
+      updateBulkControls();
+    });
+    renderCommentTranslation(state);
+    return entry.pending;
   }
 
   function removeCommentTranslation(source) {
@@ -320,6 +433,7 @@
   }
 
   function syncCommentTranslation(source) {
+    syncTranslationVideo();
     const identity = commentIdentity(source);
     const previous = commentStates.get(source);
     if (previous && source.isConnected && source.matches(COMMENT_SELECTOR) &&
@@ -342,47 +456,147 @@
     button.setAttribute("aria-live", "polite");
     controls.append(translation, button);
     source.after(controls);
-    const state = { identity, controls, pending: false };
+    let entry = commentCache.get(identity);
+    if (!entry) {
+      entry = { translation: "", failed: false, pending: null, original: true, manualOriginal: false };
+      commentCache.set(identity, entry);
+    }
+    const state = { source, identity, controls, translation, button, entry };
     commentStates.set(source, state);
+    renderCommentTranslation(state);
 
-    function isCurrent() {
-      return source.isConnected && source.matches(COMMENT_SELECTOR) &&
-        controls.parentElement === source.parentElement &&
-        commentStates.get(source) === state && commentIdentity(source) === identity;
-    }
-
-    function toggleTranslation() {
-      translation.hidden = !translation.hidden;
-      source.classList.toggle("tiktok-plus-original-hidden", !translation.hidden);
-      button.textContent = translation.hidden ? "查看译文" : "查看原文";
-    }
-
-    button.addEventListener("click", async (event) => {
+    button.addEventListener("click", (event) => {
       event.stopPropagation();
-      if (!isCurrent()) {
+      if (!isCurrentComment(state)) {
         syncCommentTranslation(source);
         return;
       }
-      if (state.pending) return;
-      if (translation.textContent) {
-        toggleTranslation();
+      if (entry.pending) return;
+      if (entry.translation) {
+        entry.manualOriginal = !entry.original;
+        showCommentTranslation(state, entry.original);
         return;
       }
-      state.pending = true;
-      button.disabled = true;
-      button.textContent = "翻译中…";
-      try {
-        const result = await translateCommentText(text);
-        if (!isCurrent()) return;
-        translation.textContent = result;
-        toggleTranslation();
-      } catch (error) {
-        if (isCurrent()) button.textContent = "翻译失败，重试";
-      } finally {
-        state.pending = false;
-        if (isCurrent()) button.disabled = false;
-      }
+      entry.manualOriginal = false;
+      requestCommentTranslation(state);
     });
+  }
+
+  function stopBulkTranslation(restoreOriginal) {
+    bulkEnabled = false;
+    bulkQueue.clear();
+    clearInterval(bulkTimer);
+    bulkTimer = null;
+    commentCache.forEach((entry) => {
+      if (restoreOriginal || entry.pending) entry.original = true;
+    });
+    document.querySelectorAll(COMMENT_SELECTOR).forEach((source) => {
+      const state = commentStates.get(source);
+      if (state) renderCommentTranslation(state);
+    });
+    updateBulkControls();
+  }
+
+  function updateBulkControls() {
+    if (!bulkControls) return;
+    const button = bulkControls.querySelector("button");
+    const label = bulkEnabled ? "全部查看原文" : "翻译全部";
+    if (button.textContent !== label) button.textContent = label;
+    button.setAttribute("aria-pressed", String(bulkEnabled));
+    const status = bulkControls.querySelector('[role="status"]');
+    const message = bulkRateLimited ? "请求受限，已停止" : bulkEnabled ?
+      (bulkRunning || bulkQueue.size ? "翻译中…" : "自动翻译已开启") : "";
+    if (status.textContent !== message) status.textContent = message;
+  }
+
+  async function runBulkQueue() {
+    if (bulkRunning || !bulkEnabled || !bulkQueue.size) return;
+    bulkRunning = true;
+    updateBulkControls();
+    try {
+      while (bulkEnabled && bulkQueue.size) {
+        syncBulkTranslations();
+        if (!bulkEnabled || !bulkPanel || !isVisible(bulkPanel)) break;
+        const state = bulkQueue.values().next().value;
+        if (!state) break;
+        bulkQueue.delete(state);
+        if (!isCurrentComment(state) || !bulkPanel.contains(state.source) ||
+            state.entry.failed || state.entry.manualOriginal) continue;
+        await requestCommentTranslation(state);
+        await new Promise((resolve) => setTimeout(resolve, 300));
+      }
+    } finally {
+      bulkRunning = false;
+      updateBulkControls();
+      if (bulkEnabled && bulkQueue.size) runBulkQueue();
+    }
+  }
+
+  function syncBulkTranslations() {
+    const videoChanged = syncTranslationVideo();
+    if (videoChanged) document.querySelectorAll(COMMENT_SELECTOR).forEach(syncCommentTranslation);
+    const panel = document.querySelector(COMMENT_PANEL_SELECTOR);
+    if (panel !== bulkPanel) {
+      bulkQueue.clear();
+      bulkControls?.remove();
+      bulkControls = null;
+      bulkPanel = panel;
+    }
+    if (!panel || !isVisible(panel)) {
+      bulkQueue.clear();
+      return;
+    }
+    const header = panel.querySelector('[class*="DivCommentHeader"]');
+    const close = header?.querySelector('[class*="DivCloseButtonWrapper"]');
+    if (!header || !close) {
+      bulkQueue.clear();
+      bulkControls?.remove();
+      bulkControls = null;
+      return;
+    }
+    if (bulkControls?.parentElement !== header) {
+      bulkControls?.remove();
+      bulkControls = document.createElement("div");
+      bulkControls.className = "tiktok-plus-bulk-controls";
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "tiktok-plus-translate-button";
+      button.title = "翻译已加载的评论和回复，并随阅读继续翻译";
+      const status = document.createElement("span");
+      status.setAttribute("role", "status");
+      bulkControls.append(button, status);
+      close.before(bulkControls);
+      button.addEventListener("click", (event) => {
+        event.stopPropagation();
+        if (syncTranslationVideo()) {
+          syncBulkTranslations();
+          return;
+        }
+        bulkRateLimited = false;
+        if (bulkEnabled) {
+          stopBulkTranslation(true);
+          return;
+        }
+        bulkEnabled = true;
+        commentCache.forEach((entry) => {
+          entry.failed = false;
+          entry.manualOriginal = false;
+        });
+        bulkTimer = setInterval(syncBulkTranslations, 500);
+        syncBulkTranslations();
+      });
+    }
+    if (bulkEnabled) {
+      panel.querySelectorAll(COMMENT_SELECTOR).forEach((source) => {
+        syncCommentTranslation(source);
+        const state = commentStates.get(source);
+        if (!state || state.entry.manualOriginal || state.entry.failed) return;
+        if (state.entry.translation) showCommentTranslation(state, true);
+        else if (!state.entry.pending) bulkQueue.add(state);
+      });
+    }
+    updateBulkControls();
+    runBulkQueue();
   }
 
   function observeCommentTranslations() {
@@ -393,11 +607,12 @@
     }
 
     visit(document.body, syncCommentTranslation);
+    syncBulkTranslations();
     new MutationObserver((records) => {
       const sources = new Set();
       for (const record of records) {
         const target = record.target instanceof Element ? record.target : record.target.parentElement;
-        if (target?.closest(".tiktok-plus-comment-controls")) continue;
+        if (target?.closest(".tiktok-plus-comment-controls, .tiktok-plus-bulk-controls")) continue;
         for (const removed of record.removedNodes) visit(removed, removeCommentTranslation);
         const source = target?.closest(COMMENT_SELECTOR);
         if (source) sources.add(source);
@@ -406,12 +621,13 @@
         visit(target, (node) => sources.add(node));
       }
       sources.forEach(syncCommentTranslation);
+      syncBulkTranslations();
     }).observe(document.body, {
       childList: true,
       characterData: true,
       subtree: true,
       attributes: true,
-      attributeFilter: ["data-e2e", "href"],
+      attributeFilter: ["data-e2e", "href", "class", "style", "hidden"],
     });
   }
 

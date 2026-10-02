@@ -2,7 +2,7 @@
 
 [简体中文](README.md)
 
-Add keyboard shortcuts and on-demand comment translation to TikTok on the web.
+Add keyboard shortcuts, individual comment translation, and continuous bulk translation to TikTok on the web.
 
 ## Shortcuts
 
@@ -50,9 +50,13 @@ Add keyboard shortcuts and on-demand comment translation to TikTok on the web.
 ## Comment translation
 
 - A “翻译” (Translate) button appears below top-level comments and expanded replies. Empty, image-only, and emoji-only comments are skipped.
-- Click to translate into Simplified Chinese. Toggle “查看原文” (View original) / “查看译文” (View translation) without another request while the same comment node remains loaded.
+- Click to translate into Simplified Chinese. Toggle “查看原文” (View original) / “查看译文” (View translation) without another request. Results are cached in memory for the current video, including when scrolling replaces comment nodes or the panel is reopened.
+- “翻译全部” (Translate all), next to the comments heading, translates loaded comments and expanded replies, then continues as you scroll or manually expand replies. It does not scroll or expand replies for you. If the heading structure is not recognized, individual translation remains available.
+- “全部查看原文” (View all originals) restores originals and stops automatic translation. Enabling again reuses cached results. Individually choosing an original is respected until you show its translation or re-enable the bulk toggle.
+- The toggle stays enabled for the current video: closing the panel pauses it, and reopening resumes it. Switching videos or refreshing turns it off and clears the memory cache.
+- Bulk requests run one at a time, at least 300ms apart. Individual failures do not stop other comments and are retried only manually or when bulk translation is re-enabled. HTTP 429 stops automatic translation, preserves successful results, and shows “请求受限，已停止” (Rate limited, stopped).
 - Failures leave the original intact. Click “翻译失败，重试” (Translation failed, retry) to retry manually. Only the comment text is translated; usernames, images, and existing actions are preserved.
-- Each translation sends that comment's text to `translate.googleapis.com` using an anonymous request without cookies. The script requests only `GM_xmlhttpRequest` and cross-origin access to that domain; no API key is needed.
+- Each first translation or retry sends that comment's text to `translate.googleapis.com` using an anonymous request without cookies. Enabling bulk translation also sends newly loaded comment text. The script requests only `GM_xmlhttpRequest` and cross-origin access to that domain; no API key is needed.
 - This unofficial Google endpoint may be rate-limited or become unavailable. Translation quality and availability are not guaranteed, and your network must be able to reach the domain.
 - To update an installed script, save the new version and refresh TikTok. If the userscript manager prompts for connection permission, allow only `translate.googleapis.com`.
 
