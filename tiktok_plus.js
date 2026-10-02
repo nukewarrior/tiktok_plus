@@ -2,7 +2,7 @@
 // @name         TikTok Plus
 // @name:zh-CN   TikTok Plus
 // @namespace    https://github.com/nukewarrior/tiktok_plus
-// @version      1.1.2
+// @version      1.1.3
 // @description  Keyboard shortcuts for TikTok playback, interaction, search, and fullscreen modes.
 // @description:zh-CN  为 TikTok 添加键盘快捷键：播放控制、互动操作、搜索聚焦和快捷键帮助面板。
 // @author       nukewarrior
@@ -15,7 +15,7 @@
 (function () {
   "use strict";
 
-  const SCRIPT_VERSION = "1.1.2";
+  const SCRIPT_VERSION = "1.1.3";
   const SEEK_SECONDS = 5;
   const SHORTCUT_GROUPS = [
     {
@@ -24,7 +24,7 @@
         ["Space", "暂停 / 播放"],
         ["↑ / ↓", "上下切视频"],
         ["← / →", "快退 / 快进 5 秒"],
-        ["H", "播放器全屏"],
+        ["H / F", "播放器全屏"],
         ["Esc", "退出全屏 / 关闭快捷键列表"],
       ],
     },
@@ -745,6 +745,7 @@
       ArrowLeft: () => seekBy(-SEEK_SECONDS),
       ArrowRight: () => seekBy(SEEK_SECONDS),
       KeyH: togglePlayerFullscreen,
+      KeyF: togglePlayerFullscreen,
       KeyZ: likeVideo,
       KeyX: openComments,
       KeyC: toggleFavorite,
