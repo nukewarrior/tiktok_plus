@@ -2,7 +2,7 @@
 // @name         TikTok Plus
 // @name:zh-CN   TikTok Plus
 // @namespace    https://github.com/nukewarrior/tiktok_plus
-// @version      1.3.0
+// @version      1.4.0
 // @description  Keyboard shortcuts, individual and continuous comment translation for TikTok.
 // @description:zh-CN  为 TikTok 添加键盘快捷键、评论逐条翻译和翻译全部。
 // @author       nukewarrior
@@ -10,13 +10,15 @@
 // @match        https://www.tiktok.com/*
 // @run-at       document-idle
 // @grant        GM_xmlhttpRequest
+// @grant        GM_getValue
+// @grant        GM_setValue
 // @connect      translate.googleapis.com
 // ==/UserScript==
 
 (function () {
   "use strict";
 
-  const SCRIPT_VERSION = "1.3.0";
+  const SCRIPT_VERSION = "1.4.0";
   const SEEK_SECONDS = 5;
   const COMMENT_SELECTOR = '[data-e2e="comment-level-1"], [data-e2e="comment-level-2"]';
   const commentStates = new WeakMap();
@@ -30,6 +32,30 @@
   let bulkRunning = false;
   let bulkTimer = null;
   let bulkRateLimited = false;
+  const bulkInFlight = new Set();
+  let bulkGeneration = 0;
+  const CACHE_KEY = "tiktok-plus:dict-chrome-ex:v1";
+  const CACHE_TTL = 30 * 86400000;
+  const MAX_CACHE = 500;
+  const MAX_CACHE_CHARS = 500000;
+  const TRANSLATION_RPM = 60;
+  const TRANSLATION_CONCURRENT = 6;
+  const translationCache = new Map();
+  const pendingTranslations = new Map();
+  const translationQueue = [];
+  const translationStarts = [];
+  const translationMetrics = { requests: 0, successes: 0, failures: 0, cacheHits: 0, rateLimits: 0 };
+  let translationActive = 0, translationSeq = 0, translationWake = null;
+  let translationCacheTimer = null, translationCooldown = 0, translationStrikes = 0, translationPaused = false;
+  try {
+    const records = GM_getValue(CACHE_KEY, []);
+    if (Array.isArray(records)) for (const entry of records) {
+      if (Array.isArray(entry) && typeof entry[0] === "string" &&
+          typeof entry[1]?.text === "string" && entry[1].expires > Date.now()) {
+        translationCache.set(entry[0], entry[1]);
+      }
+    }
+  } catch (error) { console.warn("[TikTok Plus][translate] 缓存读取失败", error); }
   const SHORTCUT_GROUPS = [
     {
       title: "播放控制",
@@ -302,40 +328,212 @@
     }, 1300);
   }
 
-  function translateCommentText(text) {
-    const query = new URLSearchParams({ client: "gtx", sl: "auto", tl: "zh-CN", dt: "t", q: text });
+
+  // Inspired by Forum Translator: same Google provider, cache lifetime and quota.
+  // Google does not publish limits for this unofficial endpoint.
+  function translationKey(text) {
+    return JSON.stringify(["google:dict-chrome-ex:v1", "zh-CN", text.trim()]);
+  }
+
+  function trimCachedTranslations() {
+    let chars = 0;
+    for (const [key, value] of translationCache) {
+      if (value.expires <= Date.now()) translationCache.delete(key);
+      else chars += value.text.length;
+    }
+    while (translationCache.size > MAX_CACHE || chars > MAX_CACHE_CHARS) {
+      const key = translationCache.keys().next().value;
+      if (key === undefined) break;
+      chars -= translationCache.get(key).text.length;
+      translationCache.delete(key);
+    }
+  }
+
+  function cachedTranslation(text) {
+    const key = translationKey(text);
+    const value = translationCache.get(key);
+    if (!value) return "";
+    if (value.expires <= Date.now()) { translationCache.delete(key); return ""; }
+    translationCache.delete(key);
+    translationCache.set(key, value);
+    translationMetrics.cacheHits++;
+    return value.text;
+  }
+
+  function flushTranslationCache() {
+    clearTimeout(translationCacheTimer);
+    translationCacheTimer = null;
+    trimCachedTranslations();
+    try { GM_setValue(CACHE_KEY, [...translationCache]); }
+    catch (error) { console.warn("[TikTok Plus][translate] 缓存写入失败", error); }
+  }
+
+  function saveTranslation(text, value) {
+    const key = translationKey(text);
+    translationCache.delete(key);
+    translationCache.set(key, { text: value, expires: Date.now() + CACHE_TTL });
+    trimCachedTranslations();
+    if (!translationCacheTimer) translationCacheTimer = setTimeout(flushTranslationCache, 600);
+  }
+
+  function googleTranslate(text) {
+    const url = new URL("https://translate.googleapis.com/translate_a/t");
+    Object.entries({ client: "dict-chrome-ex", sl: "auto", tl: "zh-CN", q: text })
+      .forEach(([key, value]) => url.searchParams.set(key, value));
     return new Promise((resolve, reject) => {
-      GM_xmlhttpRequest({
-        method: "GET",
-        url: `https://translate.googleapis.com/translate_a/single?${query}`,
-        anonymous: true,
-        timeout: 15000,
-        onload(response) {
-          try {
-            if (response.status !== 200) {
-              const error = new Error(`Translation HTTP ${response.status}`);
-              error.status = response.status;
-              throw error;
-            }
-            const payload = JSON.parse(response.responseText);
-            const segments = payload?.[0];
-            if (!Array.isArray(payload) || !Array.isArray(segments) || !segments.length ||
-                segments.some((segment) => !Array.isArray(segment) || typeof segment[0] !== "string")) {
-              throw new Error("Invalid translation response");
-            }
-            const translation = segments.map((segment) => segment[0]).join("");
-            if (!translation.trim()) throw new Error("Empty translation response");
-            resolve(translation);
-          } catch (error) {
-            reject(error);
-          }
-        },
-        onerror: () => reject(new Error("Translation network error")),
-        ontimeout: () => reject(new Error("Translation timeout")),
-        onabort: () => reject(new Error("Translation aborted")),
-      });
+      let settled = false, handle;
+      const finish = callback => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(watchdog);
+        callback();
+      };
+      const watchdog = setTimeout(() => {
+        finish(() => {
+          try { handle?.abort(); } catch (_) { /* ignore */ }
+          reject(new Error("翻译超时（25 秒）"));
+        });
+      }, 25000);
+      try {
+        handle = GM_xmlhttpRequest({
+          method: "GET", url: url.href, anonymous: true, timeout: 25000,
+          onload(response) {
+            finish(() => {
+              if (response.status !== 200) {
+                const error = new Error("Google 翻译 HTTP " + response.status);
+                error.status = response.status;
+                const after = response.responseHeaders?.match(/^Retry-After:\s*([^\r\n]+)/im)?.[1];
+                if (after) {
+                  const seconds = Number(after);
+                  const delay = Number.isFinite(seconds) ? seconds * 1000 : Date.parse(after) - Date.now();
+                  if (Number.isFinite(delay) && delay > 0) error.retryAfter = delay;
+                }
+                reject(error);
+                return;
+              }
+              try {
+                const data = JSON.parse(response.responseText);
+                const translated = Array.isArray(data)
+                  ? (Array.isArray(data[0]) ? data[0][0] : data[0]) : null;
+                if (typeof translated !== "string" || !translated.trim()) {
+                  throw new Error("Google 翻译响应格式错误");
+                }
+                resolve(translated.trim());
+              } catch (error) { reject(error); }
+            });
+          },
+          onerror: () => finish(() => reject(new Error("翻译网络错误"))),
+          ontimeout: () => finish(() => reject(new Error("翻译超时"))),
+          onabort: () => finish(() => reject(new Error("翻译请求中断"))),
+        });
+      } catch (error) { finish(() => reject(error)); }
     });
   }
+
+  function translationLog(action, details = {}) {
+    console.info("[TikTok Plus][translate]", action, {
+      ...details, active: translationActive, queued: translationQueue.length,
+      cooldownSeconds: Math.max(0, Math.ceil((translationCooldown - Date.now()) / 1000)),
+      ...translationMetrics,
+    });
+  }
+
+  function wakeTranslations(delay) {
+    if (translationWake) clearTimeout(translationWake);
+    translationWake = setTimeout(() => {
+      translationWake = null;
+      drainTranslations();
+      updateBulkControls();
+    }, Math.max(25, delay));
+  }
+
+  function completeTranslation(task, text, error) {
+    pendingTranslations.delete(task.key);
+    if (error) { translationMetrics.failures++; task.reject(error); }
+    else { translationMetrics.successes++; saveTranslation(task.text, text); task.resolve(text); }
+    updateBulkControls();
+  }
+
+  function drainTranslations() {
+    if (translationPaused) return;
+    const now = Date.now();
+    if (translationCooldown > now) { wakeTranslations(translationCooldown - now); return; }
+    while (translationStarts.length && translationStarts[0] <= Date.now() - 60000) translationStarts.shift();
+    while (translationActive < TRANSLATION_CONCURRENT && translationQueue.length) {
+      if (translationStarts.length >= TRANSLATION_RPM) {
+        wakeTranslations(translationStarts[0] + 60001 - Date.now()); break;
+      }
+      translationQueue.sort((left, right) => left.priority - right.priority || left.seq - right.seq);
+      const index = translationQueue.findIndex(task => task.readyAt <= Date.now());
+      if (index < 0) {
+        wakeTranslations(Math.min(...translationQueue.map(task => task.readyAt)) - Date.now());
+        break;
+      }
+      const task = translationQueue.splice(index, 1)[0];
+      translationActive++;
+      task.attempts++;
+      translationStarts.push(Date.now());
+      translationMetrics.requests++;
+      googleTranslate(task.text).then(value => {
+        if (Date.now() >= translationCooldown) translationStrikes = 0;
+        completeTranslation(task, value);
+      }).catch(error => {
+        if (error?.status === 429) {
+          translationMetrics.rateLimits++;
+          if (Date.now() >= translationCooldown) {
+            translationStrikes++;
+            const delay = [60000, 120000, 300000][Math.min(translationStrikes - 1, 2)];
+            translationCooldown = Date.now() + Math.min(600000, Math.max(delay, error.retryAfter || 0));
+            translationLog("HTTP 429", { attempts: task.attempts });
+          }
+          if (task.attempts < 3) {
+            task.readyAt = translationCooldown;
+            translationQueue.push(task);
+          } else {
+            translationPaused = true;
+            bulkRateLimited = true;
+            completeTranslation(task, null, error);
+            translationLog("已暂停，需手动恢复");
+          }
+        } else if (task.attempts < 3 && /网络|超时|响应|HTTP (?:408|5\d\d)/.test(error?.message || "")) {
+          task.readyAt = Date.now() + task.attempts * 1000;
+          translationQueue.push(task);
+        } else {
+          completeTranslation(task, null, error);
+        }
+      }).finally(() => {
+        translationActive--;
+        drainTranslations();
+        updateBulkControls();
+      });
+    }
+  }
+
+  function translateCommentText(text, priority = 1) {
+    const cached = cachedTranslation(text);
+    if (cached) return Promise.resolve(cached);
+    const key = translationKey(text);
+    const active = pendingTranslations.get(key);
+    if (active) {
+      active.priority = Math.min(priority, active.priority);
+      drainTranslations();
+      return active.promise;
+    }
+    let resolve, reject;
+    const promise = new Promise((ok, fail) => { resolve = ok; reject = fail; });
+    const task = { key, text, priority, resolve, reject, promise, attempts: 0, readyAt: 0, seq: translationSeq++ };
+    pendingTranslations.set(key, task);
+    translationQueue.push(task);
+    drainTranslations();
+    return promise;
+  }
+
+  function promoteTranslation(text) {
+    const task = pendingTranslations.get(translationKey(text));
+    if (task) { task.priority = 0; drainTranslations(); }
+  }
+
+  addEventListener("pagehide", flushTranslationCache);
 
   function getTranslationVideoKey() {
     return location.pathname.match(/\/video\/(\d+)/)?.[1] ||
