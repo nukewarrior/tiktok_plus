@@ -587,27 +587,29 @@
     renderCommentTranslation(state);
   }
 
-  function requestCommentTranslation(state) {
+  function requestCommentTranslation(state, priority = 0) {
     if (!isCurrentComment(state)) return Promise.resolve();
     const entry = state.entry;
-    if (entry.pending) return entry.pending;
+    if (entry.pending) {
+      if (priority === 0) promoteTranslation(state.source.textContent.trim());
+      return entry.pending;
+    }
     if (entry.translation) {
       showCommentTranslation(state, true);
       return Promise.resolve();
     }
     entry.original = false;
     entry.failed = false;
-    entry.pending = translateCommentText(state.source.textContent.trim()).then((result) => {
+    entry.pending = translateCommentText(state.source.textContent.trim(), priority).then((result) => {
       syncTranslationVideo();
       if (commentCache.get(state.identity) === entry) entry.translation = result;
     }).catch((error) => {
       syncTranslationVideo();
       if (commentCache.get(state.identity) !== entry) return;
       entry.failed = true;
-      if (error.status === 429 && bulkEnabled) {
-        stopBulkTranslation(false);
+      if (error.status === 429) {
         bulkRateLimited = true;
-        toast("请求受限，已停止自动翻译");
+        toast("Google 翻译请求受限，请稍后恢复");
       }
     }).finally(() => {
       entry.pending = null;
@@ -656,7 +658,7 @@
     source.after(controls);
     let entry = commentCache.get(identity);
     if (!entry) {
-      entry = { translation: "", failed: false, pending: null, original: true, manualOriginal: false };
+      entry = { translation: cachedTranslation(text), failed: false, pending: null, original: true, manualOriginal: false };
       commentCache.set(identity, entry);
     }
     const state = { source, identity, controls, translation, button, entry };
@@ -681,6 +683,8 @@
   }
 
   function stopBulkTranslation(restoreOriginal) {
+    bulkGeneration++;
+    bulkInFlight.clear();
     bulkEnabled = false;
     bulkQueue.clear();
     clearInterval(bulkTimer);
@@ -698,36 +702,36 @@
   function updateBulkControls() {
     if (!bulkControls) return;
     const button = bulkControls.querySelector("button");
-    const label = bulkEnabled ? "全部查看原文" : "翻译全部";
+    const label = translationPaused && bulkEnabled ? "恢复翻译" : bulkEnabled ? "全部查看原文" : "翻译全部";
     if (button.textContent !== label) button.textContent = label;
     button.setAttribute("aria-pressed", String(bulkEnabled));
     const status = bulkControls.querySelector('[role="status"]');
-    const message = bulkRateLimited ? "请求受限，已停止" : bulkEnabled ?
-      (bulkRunning || bulkQueue.size ? "翻译中…" : "自动翻译已开启") : "";
+    const cooldown = Math.max(0, Math.ceil((translationCooldown - Date.now()) / 1000));
+    const message = translationPaused ? "请求受限，已暂停 · 点击恢复" :
+      cooldown ? `冷却中 ${String(Math.floor(cooldown / 60)).padStart(2, "0")}:${String(cooldown % 60).padStart(2, "0")}` :
+      bulkRateLimited ? "请求受限，已暂停" :
+      bulkEnabled ? (bulkInFlight.size || bulkQueue.size || translationQueue.length ? "翻译中…" : "自动翻译已开启") : "";
     if (status.textContent !== message) status.textContent = message;
   }
 
-  async function runBulkQueue() {
-    if (bulkRunning || !bulkEnabled || !bulkQueue.size) return;
-    bulkRunning = true;
-    updateBulkControls();
-    try {
-      while (bulkEnabled && bulkQueue.size) {
-        syncBulkTranslations();
-        if (!bulkEnabled || !bulkPanel || !isVisible(bulkPanel)) break;
-        const state = bulkQueue.values().next().value;
-        if (!state) break;
-        bulkQueue.delete(state);
-        if (!isCurrentComment(state) || !bulkPanel.contains(state.source) ||
-            state.entry.failed || state.entry.manualOriginal) continue;
-        await requestCommentTranslation(state);
-        await new Promise((resolve) => setTimeout(resolve, 300));
-      }
-    } finally {
-      bulkRunning = false;
-      updateBulkControls();
-      if (bulkEnabled && bulkQueue.size) runBulkQueue();
+  function runBulkQueue() {
+    if (!bulkEnabled || !bulkPanel || !isVisible(bulkPanel) || translationPaused) return;
+    const generation = bulkGeneration;
+    while (bulkEnabled && bulkQueue.size && bulkInFlight.size < TRANSLATION_CONCURRENT) {
+      const state = bulkQueue.values().next().value;
+      if (!state) break;
+      bulkQueue.delete(state);
+      if (!isCurrentComment(state) || !bulkPanel.contains(state.source) ||
+          state.entry.failed || state.entry.manualOriginal || state.entry.pending) continue;
+      const job = requestCommentTranslation(state, isVisible(state.source) ? 1 : 2);
+      bulkInFlight.add(job);
+      job.finally(() => {
+        bulkInFlight.delete(job);
+        if (bulkEnabled && bulkGeneration === generation) syncBulkTranslations();
+        updateBulkControls();
+      });
     }
+    updateBulkControls();
   }
 
   function syncBulkTranslations() {
@@ -767,6 +771,15 @@
       button.addEventListener("click", (event) => {
         event.stopPropagation();
         if (syncTranslationVideo()) {
+          syncBulkTranslations();
+          return;
+        }
+        if (translationPaused && bulkEnabled) {
+          translationPaused = false;
+          bulkRateLimited = false;
+          commentCache.forEach(entry => { entry.failed = false; });
+          translationLog("用户手动恢复");
+          drainTranslations();
           syncBulkTranslations();
           return;
         }
