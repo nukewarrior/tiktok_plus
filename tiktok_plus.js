@@ -439,12 +439,16 @@
   }
 
   function wakeTranslations(delay) {
-    if (translationWake) clearTimeout(translationWake);
-    translationWake = setTimeout(() => {
+    // Keep the earliest wake-up; repeated DOM scans must not postpone cooldown expiry.
+    const at = Date.now() + Math.max(25, delay);
+    if (translationWake && translationWake.at <= at) return;
+    if (translationWake) clearTimeout(translationWake.id);
+    const id = setTimeout(() => {
       translationWake = null;
       drainTranslations();
       updateBulkControls();
     }, Math.max(25, delay));
+    translationWake = { id, at };
   }
 
   function completeTranslation(task, text, error) {
@@ -590,6 +594,12 @@
   function requestCommentTranslation(state, priority = 0) {
     if (!isCurrentComment(state)) return Promise.resolve();
     const entry = state.entry;
+    if (priority === 0 && translationPaused) {
+      translationPaused = false;
+      bulkRateLimited = false;
+      translationLog("手动请求恢复队列");
+      drainTranslations();
+    }
     if (entry.pending) {
       if (priority === 0) promoteTranslation(state.source.textContent.trim());
       return entry.pending;
@@ -787,6 +797,11 @@
         if (bulkEnabled) {
           stopBulkTranslation(true);
           return;
+        }
+        if (translationPaused) {
+          translationPaused = false;
+          translationLog("启用批量翻译并恢复队列");
+          drainTranslations();
         }
         bulkEnabled = true;
         commentCache.forEach((entry) => {
