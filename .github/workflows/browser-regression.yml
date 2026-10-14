@@ -1,0 +1,35 @@
+name: TikTok Plus 浏览器回归
+
+on:
+  pull_request:
+    branches: [master]
+  push:
+    branches: [feat/google-translation-v1.4.0]
+
+jobs:
+  browser-regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: 使用 Chrome 运行评论翻译回归用例
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m http.server 8765 --bind 127.0.0.1 >/tmp/tiktok-test-server.log 2>&1 &
+          SERVER_PID=$!
+          trap 'kill "$SERVER_PID" 2>/dev/null || true' EXIT
+          for _ in {1..20}; do
+            if curl -fsS http://127.0.0.1:8765/tests/comment-translation.html >/dev/null; then break; fi
+            sleep 1
+          done
+          CHROME="$(command -v google-chrome || command -v chromium || true)"
+          test -n "$CHROME" || { echo "找不到 Chrome/Chromium"; exit 1; }
+          timeout 90 "$CHROME" --headless=new --no-sandbox --disable-gpu --disable-dev-shm-usage             --virtual-time-budget=20000 --dump-dom             http://127.0.0.1:8765/tests/comment-translation.html             > /tmp/tiktok-test-results.html 2>/tmp/tiktok-chrome.log
+          if ! grep -Eq '通过 [0-9]+ 项检查' /tmp/tiktok-test-results.html; then
+            echo "浏览器回归失败，结果页面："
+            grep -A 40 'id="results"' /tmp/tiktok-test-results.html | head -n 65 || true
+            cat /tmp/tiktok-chrome.log | tail -n 30 || true
+            exit 1
+          fi
+          grep -oE '通过 [0-9]+ 项检查' /tmp/tiktok-test-results.html | tail -n 1
