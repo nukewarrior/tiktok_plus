@@ -138,6 +138,20 @@
       await flush();
       check("请求去重仍分别更新两个评论", !translated(sameA).hidden && !translated(sameB).hidden);
 
+      const longText = "A".repeat(899) + "😀" + "B".repeat(950);
+      const longComment = makeComment(longText);
+      await flush();
+      const longStart = requests.length;
+      buttonFor(longComment).click();
+      check("超过900字符拆分为3个请求", requests.length === longStart + 3 &&
+        requests.slice(longStart).every(request => requestText(request).length <= 900));
+      check("分段边界不会截断Emoji", requests.slice(longStart).some(request =>
+        requestText(request).includes("😀")) &&
+        requests.slice(longStart).every(request => !requestText(request).includes("�")));
+      for (let i = longStart; i < requests.length; i++) respond(requests[i], "译文块" + (i - longStart));
+      await flush();
+      check("分段结果拼接回同一条评论", translated(longComment).textContent === "译文块0译文块1译文块2");
+
       const emoji = makeComment("🤩🔥");
       await flush();
       check("纯表情评论不会注入翻译入口", !buttonFor(emoji));
@@ -229,7 +243,12 @@
       respond(requests.at(-1), "429", 429);
       await flush();
       check("HTTP 429 进入冷却队列而非立即重发", requests.length === cooldownStart + 1);
-      check("限流计时持续阻止短时间内新请求", requests.length === cooldownStart + 1);
+      const blocked = makeComment("Request while cooldown is active");
+      await flush();
+      buttonFor(blocked).click();
+      await wait(100);
+      check("429 冷却期间新评论排队不发送请求",
+        requests.length === cooldownStart + 1 && buttonFor(blocked).disabled);
 
       dispatchEvent(new Event("pagehide"));
       check("持久化缓存写入用户脚本存储", storage.get("tiktok-plus:dict-chrome-ex:v1")
