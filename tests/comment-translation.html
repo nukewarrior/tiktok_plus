@@ -38,6 +38,7 @@
     requests.push(request);
     return { abort() { request.aborted = true; } };
   };
+  window.__tiktokRequests = requests;
   const storage = new Map();
   const seedKey = JSON.stringify(["google:dict-chrome-ex:v1", "zh-CN", "Previously translated"]);
   storage.set("tiktok-plus:dict-chrome-ex:v1",
@@ -59,7 +60,7 @@
   (async () => {
     const output = document.querySelector("#results");
     const passed = [];
-    const requests = window.requests || globalThis.requests;
+    const requests = window.__tiktokRequests;
     const flush = () => new Promise(resolve => setTimeout(resolve, 0));
     const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
     const until = async (predicate, seconds = 5) => {
