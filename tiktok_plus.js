@@ -513,7 +513,7 @@
     }
   }
 
-  function translateCommentText(text, priority = 1) {
+  function translateChunk(text, priority = 1) {
     const cached = cachedTranslation(text);
     if (cached) return Promise.resolve(cached);
     const key = translationKey(text);
@@ -532,9 +532,39 @@
     return promise;
   }
 
+  function splitTranslationText(text, limit = 900) {
+    const chunks = [];
+    let chunk = "";
+    // for...of walks Unicode code points; surrogate pairs are never split.
+    for (const character of text) {
+      if (chunk && chunk.length + character.length > limit) {
+        chunks.push(chunk);
+        chunk = "";
+      }
+      chunk += character;
+    }
+    if (chunk) chunks.push(chunk);
+    return chunks;
+  }
+
+  function translateCommentText(text, priority = 1) {
+    const cached = cachedTranslation(text);
+    if (cached) return Promise.resolve(cached);
+    const chunks = splitTranslationText(text);
+    if (chunks.length <= 1) return translateChunk(text, priority);
+    return Promise.all(chunks.map(chunk => translateChunk(chunk, priority))).then(translations => {
+      const result = translations.join("");
+      saveTranslation(text, result);
+      return result;
+    });
+  }
+
   function promoteTranslation(text) {
-    const task = pendingTranslations.get(translationKey(text));
-    if (task) { task.priority = 0; drainTranslations(); }
+    for (const part of splitTranslationText(text)) {
+      const task = pendingTranslations.get(translationKey(part));
+      if (task) task.priority = 0;
+    }
+    drainTranslations();
   }
 
   addEventListener("pagehide", flushTranslationCache);
