@@ -2,7 +2,7 @@
 // @name         TikTok Plus
 // @name:zh-CN   TikTok Plus
 // @namespace    https://github.com/nukewarrior/tiktok_plus
-// @version      1.4.0
+// @version      1.4.1
 // @description  Keyboard shortcuts, individual and continuous comment translation for TikTok.
 // @description:zh-CN  为 TikTok 添加键盘快捷键、评论逐条翻译和翻译全部。
 // @author       nukewarrior
@@ -18,9 +18,14 @@
 (function () {
   "use strict";
 
-  const SCRIPT_VERSION = "1.4.0";
+  const SCRIPT_VERSION = "1.4.1";
   const SEEK_SECONDS = 5;
   const COMMENT_SELECTOR = '[data-e2e="comment-level-1"], [data-e2e="comment-level-2"]';
+  const FULLSCREEN_CARD_CLASS = "tiktok-plus-fs-card";
+  const FULLSCREEN_VIDEO_CLASS = "tiktok-plus-fs-video";
+  const INTERACTIVE_SELECTOR = 'button, a, [role="button"], [tabindex]';
+  const FULLSCREEN_CONTROL_DATA = ["cinema-mode-entry", "cinema-mode-exit"];
+  const FULLSCREEN_CONTROL_LABELS = [/full[\s-]?screen/i, /全屏/];
   const commentStates = new WeakMap();
   const COMMENT_PANEL_SELECTOR = 'section[class*="SectionCommentSidebarContainer"]';
   const commentCache = new Map();
@@ -147,6 +152,24 @@
       flex-shrink: 0;
       margin: 0;
       padding: 2px 4px;
+    }
+
+    .tiktok-plus-fs-card {
+      background: #000 !important;
+    }
+
+    /* TikTok paints frames on a super-resolution canvas layer and hides the <video> element.
+       Showing the video layer back keeps the full frame visible when the card goes fullscreen. */
+    .tiktok-plus-fs-card img,
+    .tiktok-plus-fs-card canvas,
+    .tiktok-plus-fs-card tt-vod-sr-wrap {
+      display: none !important;
+    }
+
+    .tiktok-plus-fs-card video,
+    video.tiktok-plus-fs-card {
+      opacity: 1 !important;
+      object-fit: contain !important;
     }
 
     .tiktok-plus-toast {
@@ -1207,18 +1230,109 @@
     scrollFeed(direction);
   }
 
-  function togglePlayerFullscreen() {
+  function getFullscreenElement() {
+    return document.fullscreenElement || document.webkitFullscreenElement || null;
+  }
+
+  function getFullscreenTarget(video = getCurrentVideo()) {
+    if (!video) return null;
+    // Prefer the player card: it keeps TikTok's own overlay controls and sizing rules.
+    return getVideoRoot(video) || video;
+  }
+
+  function requestElementFullscreen(element) {
+    const request = element.requestFullscreen || element.webkitRequestFullscreen;
+    if (!request) return Promise.resolve(false);
+    return Promise.resolve(request.call(element)).then(() => true, () => false);
+  }
+
+  function exitElementFullscreen() {
+    const exit = document.exitFullscreen || document.webkitExitFullscreen;
+    if (!exit) return Promise.resolve(false);
+    return Promise.resolve(exit.call(document)).then(() => true, () => false);
+  }
+
+  // TikTok has no stable fullscreen button in the current player, so native-element plain
+  // fullscreen is the primary path and the legacy cinema-mode control is only a fallback.
+  function clickFullscreenControl() {
+    const candidates = fullscreenControlCandidates();
+    const byData = candidates.find(hasFullscreenDataHook);
+    if (clickElement(byData)) return true;
+
+    const byLabel = candidates.find((element) => matchesAny(elementText(element), FULLSCREEN_CONTROL_LABELS));
+    return clickElement(byLabel);
+  }
+
+  function fullscreenControlCandidates() {
+    const dataSelector = FULLSCREEN_CONTROL_DATA
+      .map((value) => `[data-e2e="${value}"], [data-e2e*="${value}"]`)
+      .join(",");
+
+    return candidatesNearCurrent([dataSelector]).filter((element) => {
+      const control = element.closest(INTERACTIVE_SELECTOR);
+      if (!control) return false;
+      // The media card carries aria-label="Watch in full screen" and tabindex, but clicking it
+      // only toggles playback, so it must never be picked as a fullscreen control.
+      if ((control.getAttribute("data-e2e") || "") === "feed-video") return false;
+      if (control.tagName === "SECTION" || control.tagName === "ARTICLE") return false;
+      // A label match must land on a real button-like node; an explicit cinema-mode hook may
+      // also be a plain container, which is still safe enough to click.
+      if (control.matches('button, a, [role="button"]')) return true;
+      return hasFullscreenDataHook(element) || hasFullscreenDataHook(control);
+    });
+  }
+
+  function hasFullscreenDataHook(element) {
+    const value = element.getAttribute("data-e2e") || "";
+    return FULLSCREEN_CONTROL_DATA.some((name) => value.includes(name));
+  }
+
+  function clearFullscreenClasses() {
+    document.querySelectorAll(`.${FULLSCREEN_CARD_CLASS}, .${FULLSCREEN_VIDEO_CLASS}`)
+      .forEach((element) => element.classList.remove(FULLSCREEN_CARD_CLASS, FULLSCREEN_VIDEO_CLASS));
+  }
+
+  function markFullscreenContainment(target) {
+    clearFullscreenClasses();
+    if (target instanceof Element) {
+      target.classList.add(target.tagName === "VIDEO" ? FULLSCREEN_VIDEO_CLASS : FULLSCREEN_CARD_CLASS);
+    }
+  }
+
+  async function togglePlayerFullscreen() {
     const video = getCurrentVideo();
     if (!video) {
       toast("No video found");
       return;
     }
 
-    const toggled = clickDataFirst(
-      ["cinema-mode-entry", "cinema-mode-exit"],
-      [/full[\s-]?screen/i, /全屏/]
-    );
-    toast(toggled ? "Fullscreen toggled" : "Fullscreen control not found");
+    if (getFullscreenElement()) {
+      markFullscreenContainment(null);
+      const exited = await exitElementFullscreen();
+      toast(exited ? "Exit fullscreen" : "Exit fullscreen failed");
+      return;
+    }
+
+    const target = getFullscreenTarget(video);
+    if (!target) {
+      toast("No video found");
+      return;
+    }
+
+    // Mark first so the containment rules apply on the very first painted frame.
+    markFullscreenContainment(target);
+    if (await requestElementFullscreen(target)) {
+      toast("Player fullscreen");
+      return;
+    }
+
+    clearFullscreenClasses();
+    if (clickFullscreenControl()) {
+      toast("Fullscreen toggled");
+      return;
+    }
+
+    toast("Fullscreen not allowed");
   }
 
   function likeVideo() {
@@ -1355,9 +1469,19 @@
   }
 
   async function exitFullscreenModes() {
-    if (document.fullscreenElement) {
-      await document.exitFullscreen().catch(() => {});
-    }
+    if (!getFullscreenElement()) return;
+    markFullscreenContainment(null);
+    await exitElementFullscreen();
+  }
+
+  // Browsers exit fullscreen on their own for Escape and for native controls, so the
+  // containment classes must also be cleared when the change was not initiated by us.
+  function watchFullscreenChanges() {
+    const sync = () => {
+      if (!getFullscreenElement()) clearFullscreenClasses();
+    };
+    document.addEventListener("fullscreenchange", sync, true);
+    document.addEventListener("webkitfullscreenchange", sync, true);
   }
 
   function onKeyDown(event) {
@@ -1427,5 +1551,6 @@
 
   installStyle();
   observeCommentTranslations();
+  watchFullscreenChanges();
   document.addEventListener("keydown", onKeyDown, true);
 })();

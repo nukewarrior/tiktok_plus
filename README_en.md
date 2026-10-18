@@ -47,6 +47,13 @@ Add keyboard shortcuts, individual comment translation, and continuous bulk tran
 - Most shortcuts are disabled while an editable field is focused to avoid interfering with typing. `Esc`, `Shift + F`, and `Shift + ?` still work.
 - Interaction shortcuts rely on controls available on the current TikTok page. A TikTok UI update may require adapting individual shortcuts.
 
+### Fullscreen
+
+- `H` / `F` takes the player card of the current video fullscreen through the Fullscreen API; press it again or press `Esc` to exit.
+- The video keeps its original aspect ratio: portrait videos get pillarboxing and landscape videos get letterboxing, so nothing is stretched or cropped.
+- TikTok currently paints frames on a super-resolution canvas layer and keeps the `<video>` element transparent. While fullscreen, the script switches back to the video layer and frames it with `contain`, then restores everything on exit without disturbing the page's own player.
+- If the browser rejects the fullscreen request (for example without a user gesture or due to site policy), the script falls back to clicking the page's own fullscreen control. When neither works it reports `Fullscreen not allowed` instead of failing silently.
+
 ## Comment translation
 
 - A “翻译” (Translate) button appears below top-level comments and expanded replies. Empty, image-only, and emoji-only comments are skipped.

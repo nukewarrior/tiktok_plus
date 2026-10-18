@@ -25,7 +25,9 @@
   <div class="DivCommentHeader"><span>评论</span><div class="DivCloseButtonWrapper"><button aria-label="exit">×</button></div></div>
   <div id="bulk-comments"></div>
 </section>
-<video></video>
+<section id="player-card" data-e2e="feed-video" aria-label="Watch in full screen">
+  <video></video>
+</section>
 <button data-e2e="comment-icon" id="open-comments">评论区</button>
 <button data-e2e="cinema-mode-entry" id="fullscreen">全屏</button>
 <button aria-label="Next" id="next-video">下一个</button>
@@ -54,8 +56,33 @@
       super(type, init);
     }
   };
+  // TikTok's media card is labelled "Watch in full screen" but only toggles playback, so the
+  // harness reproduces it to prove the shortcut never treats the card as a fullscreen control.
+  window.__cardClicks = 0;
+  document.querySelector("#player-card").addEventListener("click", () => window.__cardClicks++);
+  // Fake the Fullscreen API so request/exit behaviour is asserted deterministically.
+  const fullscreenCalls = [];
+  let fakeFullscreenElement = null;
+  Object.defineProperty(document, "fullscreenElement", { configurable: true, get: () => fakeFullscreenElement });
+  Object.defineProperty(document, "exitFullscreen", {
+    configurable: true,
+    value: () => {
+      fullscreenCalls.push("exit");
+      fakeFullscreenElement = null;
+      document.dispatchEvent(new Event("fullscreenchange"));
+      return Promise.resolve();
+    },
+  });
+  Element.prototype.requestFullscreen = function () {
+    fullscreenCalls.push(this);
+    if (window.__denyFullscreen) return Promise.reject(new TypeError("Fullscreen request denied"));
+    fakeFullscreenElement = this;
+    document.dispatchEvent(new Event("fullscreenchange"));
+    return Promise.resolve();
+  };
+  window.__fullscreenCalls = fullscreenCalls;
 </script>
-<script src="../tiktok_plus.js?v=1.4.0"></script>
+<script src="../tiktok_plus.js?v=1.4.1"></script>
 <script>
   (async () => {
     const output = document.querySelector("#results");
@@ -161,6 +188,36 @@
       respond(requests.at(-1), '<img src=x onerror="alert(1)">');
       await flush();
       check("译文按文本渲染，不执行 HTML", translated(injection).children.length === 0);
+
+      const calls = window.__fullscreenCalls;
+      const card = document.querySelector("#player-card");
+      let fullscreenControlClicks = 0;
+      document.querySelector("#fullscreen").addEventListener("click", () => fullscreenControlClicks++);
+      const clickedControl = () => window.__cardClicks === 0 && fullscreenControlClicks === 0;
+      key(document.body, "KeyF", "f");
+      await flush();
+      check("F 通过 Fullscreen API 进入播放器全屏", calls.length === 1 && calls[0] === card &&
+        card.classList.contains("tiktok-plus-fs-card"));
+      check("进入全屏不点击媒体卡片或旧影院控件", document.fullscreenElement === card && clickedControl());
+      key(document.body, "KeyH", "h");
+      await flush();
+      check("H 退出全屏并调用 exitFullscreen", calls.length === 2 && calls[1] === "exit" &&
+        !document.fullscreenElement);
+      check("退出后清理布局类", !card.className.includes("tiktok-plus-fs-"));
+
+      window.__denyFullscreen = true;
+      key(document.body, "KeyF", "f");
+      await flush();
+      check("API 被拒绝时退回点击原生全屏控件", fullscreenControlClicks === 1 && !document.fullscreenElement);
+      check("兜底失败后不残留布局类", !document.querySelector(".tiktok-plus-fs-card, .tiktok-plus-fs-video"));
+      window.__denyFullscreen = false;
+
+      // Firefox/Safari can exit fullscreen themselves (Escape, OS gesture); the layout classes
+      // must be dropped even when the script did not run the exit itself.
+      card.classList.add("tiktok-plus-fs-card");
+      document.dispatchEvent(new Event("fullscreenchange"));
+      await flush();
+      check("浏览器自行退出时同步清理布局类", !card.className.includes("tiktok-plus-fs-"));
 
       const panel = document.querySelector("#bulk-panel");
       const list = document.querySelector("#bulk-comments");
