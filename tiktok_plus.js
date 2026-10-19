@@ -2,7 +2,7 @@
 // @name         TikTok Plus
 // @name:zh-CN   TikTok Plus
 // @namespace    https://github.com/nukewarrior/tiktok_plus
-// @version      1.5.1
+// @version      1.5.2
 // @description  Keyboard shortcuts, individual and continuous comment translation for TikTok.
 // @description:zh-CN  为 TikTok 添加键盘快捷键、评论逐条翻译和翻译全部。
 // @author       nukewarrior
@@ -18,7 +18,7 @@
 (function () {
   "use strict";
 
-  const SCRIPT_VERSION = "1.5.1";
+  const SCRIPT_VERSION = "1.5.2";
   const SEEK_SECONDS = 5;
   const COMMENT_SELECTOR = '[data-e2e="comment-level-1"], [data-e2e="comment-level-2"]';
   const INTERACTIVE_SELECTOR = 'button, a, [role="button"], [tabindex]';
@@ -58,6 +58,7 @@
     resizeObserver: null,
     mutationObserver: null,
     videoCleanup: null,
+    barColorCleanup: null,
     listeners: null,
   };
   const commentStates = new WeakMap();
@@ -348,10 +349,14 @@
       color: #fff !important;
     }
 
-    /* Replace only the light-theme ink; liked/favorited icons keep their red/yellow fills. */
-    html.tiktok-plus-cinema-mode .tiktok-plus-cinema-bar [fill="#161823"] {
-      fill: #fff !important;
+    html.tiktok-plus-cinema-mode .tiktok-plus-cinema-bar strong,
+    html.tiktok-plus-cinema-mode .tiktok-plus-cinema-bar [data-e2e$="-count"] {
+      color: #fff !important;
     }
+
+    html.tiktok-plus-cinema-mode .tiktok-plus-cinema-ink-color { color: #fff !important; }
+    html.tiktok-plus-cinema-mode .tiktok-plus-cinema-ink-fill { fill: #fff !important; }
+    html.tiktok-plus-cinema-mode .tiktok-plus-cinema-ink-stroke { stroke: #fff !important; }
 
     /* Player wrappers can retain pixel sizes or transforms from the normal feed layout. */
     html.tiktok-plus-cinema-mode .tiktok-plus-cinema-media,
@@ -1652,6 +1657,10 @@
   }
 
   function teardownCinemaCard() {
+    if (cinemaState.barColorCleanup) {
+      cinemaState.barColorCleanup();
+      cinemaState.barColorCleanup = null;
+    }
     if (cinemaState.resizeObserver) {
       cinemaState.resizeObserver.disconnect();
       cinemaState.resizeObserver = null;
@@ -1684,6 +1693,7 @@
   }
 
   function watchCinemaCard(card) {
+    if (cinemaState.bar) watchCinemaBarColors(cinemaState.bar);
     const onChange = () => requestAnimationFrame(layoutCinema);
     if (typeof ResizeObserver === "function") {
       cinemaState.resizeObserver = new ResizeObserver(onChange);
@@ -1698,6 +1708,35 @@
       video.addEventListener("loadedmetadata", refresh);
       cinemaState.videoCleanup = () => video.removeEventListener("loadedmetadata", refresh);
     }
+  }
+
+  function watchCinemaBarColors(bar) {
+    const properties = ["color", "fill", "stroke"];
+    const classes = properties.map(name => `tiktok-plus-cinema-ink-${name}`);
+    const clear = () => bar.querySelectorAll("svg, svg *")
+      .forEach(element => element.classList.remove(...classes));
+    const refresh = () => {
+      observer.disconnect();
+      clear();
+      const updates = [];
+      bar.querySelectorAll("svg, svg *").forEach(element => {
+        const style = getComputedStyle(element);
+        properties.forEach((name, index) => {
+          const color = style.getPropertyValue(name);
+          if (!/^rgba?\(/.test(color)) return;
+          const channels = color.match(/[\d.]+/g).map(Number);
+          const rgb = channels.slice(0, 3);
+          // Only lift dark neutral ink; colored state icons and transparent paints stay intact.
+          if (channels[3] === 0 || Math.max(...rgb) >= 128 || Math.max(...rgb) - Math.min(...rgb) > 24) return;
+          updates.push([element, classes[index]]);
+        });
+      });
+      updates.forEach(([element, className]) => element.classList.add(className));
+      observer.observe(bar, { childList: true, subtree: true, attributes: true });
+    };
+    const observer = new MutationObserver(refresh);
+    cinemaState.barColorCleanup = () => { observer.disconnect(); clear(); };
+    refresh();
   }
 
   function enterCinema() {

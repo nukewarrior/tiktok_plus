@@ -24,6 +24,8 @@
   .DivMediaCardOverlayBottom { position: absolute; bottom: 8px; left: 8px; z-index: 3; }
   .SectionActionBarContainer { color: var(--ui-text-1); }
   .SectionActionBarContainer svg { width: 24px; height: 24px; }
+  #like-icon svg { color: rgb(22, 24, 35); fill: currentColor; }
+  #like-icon strong { color: rgb(22, 24, 35); }
   #media-card-row { display: flex; gap: 16px; height: 100%; justify-content: center; align-items: center; }
   #bulk-panel { position: fixed; top: 250px; right: 12px; width: 420px; max-height: 480px; overflow: auto; background: Canvas; border: 1px solid GrayText; }
   #bulk-panel [class="DivCommentHeader"] { display: flex; align-items: center; padding: 8px; }
@@ -53,9 +55,9 @@
         <div class="DivMediaCardOverlayBottom" id="video-info">作者信息</div>
       </section>
       <section class="SectionActionBarContainer" id="action-bar">
-        <div role="button" tabindex="0" data-e2e="like-icon" id="like-icon" aria-pressed="false"><svg viewBox="0 0 24 24"><path fill="#161823" d="M2 2h20v20H2z"/></svg></div>
-        <div role="button" tabindex="0" data-e2e="comment-icon" id="comment-icon">💬</div>
-        <div role="button" tabindex="0" data-e2e="favorite-icon" id="favorite-icon">🔖</div>
+        <div role="button" tabindex="0" data-e2e="like-icon" id="like-icon" aria-pressed="false"><svg viewBox="0 0 24 24"><path fill="currentColor" d="M2 2h20v20H2z"/></svg><strong data-e2e="like-count">284.5K</strong></div>
+        <div role="button" tabindex="0" data-e2e="comment-icon" id="comment-icon"><svg viewBox="0 0 24 24" style="fill: rgba(22, 24, 35, 0.9)"><path d="M2 2h20v20H2z"/></svg><strong style="color:rgb(22,24,35)">268</strong></div>
+        <div role="button" tabindex="0" data-e2e="favorite-icon" id="favorite-icon"><svg viewBox="0 0 24 24"><path fill="none" stroke="rgb(22,24,35)" stroke-width="2" d="M2 2h20v20H2z"/></svg><strong data-e2e="favorite-count">6511</strong></div>
       </section>
     </div>
   </article>
@@ -157,7 +159,7 @@
   };
   window.__fullscreenCalls = fullscreenCalls;
 </script>
-<script src="../tiktok_plus.js?v=1.5.1"></script>
+<script src="../tiktok_plus.js?v=1.5.2"></script>
 <script>
   (async () => {
     const output = document.querySelector("#results");
@@ -351,10 +353,37 @@
         previous.getBoundingClientRect().bottom <= 1 && next.getBoundingClientRect().top >= innerHeight - 1);
       check("黑底工具栏文字与默认图标保持高对比度", getComputedStyle(bar).color === "rgb(255, 255, 255)" &&
         getComputedStyle(bar.querySelector("path")).fill === "rgb(255, 255, 255)");
+      check("图标独立行内填色和描边也保持可见", getComputedStyle(bar.querySelector("#comment-icon path")).fill === "rgb(255, 255, 255)" &&
+        getComputedStyle(bar.querySelector("#favorite-icon path")).stroke === "rgb(255, 255, 255)" &&
+        getComputedStyle(bar.querySelector("#favorite-icon path")).fill === "none");
+      check("带独立颜色的计数显示为白色", [...bar.querySelectorAll("strong")].every(node =>
+        getComputedStyle(node).color === "rgb(255, 255, 255)"));
       const likePath = bar.querySelector("path");
       likePath.setAttribute("fill", "#fe2c55");
+      await frames();
       check("影院样式不覆盖已点赞的红色图标", getComputedStyle(likePath).fill === "rgb(254, 44, 85)");
-      likePath.setAttribute("fill", "#161823");
+      const favoritePath = bar.querySelector("#favorite-icon path");
+      favoritePath.setAttribute("fill", "#face15");
+      await frames();
+      check("影院样式不覆盖已收藏的黄色图标", getComputedStyle(favoritePath).fill === "rgb(250, 206, 21)");
+      favoritePath.setAttribute("fill", "none");
+      likePath.setAttribute("fill", "currentColor");
+      await frames();
+      check("取消点赞后图标恢复为可见白色", getComputedStyle(likePath).fill === "rgb(255, 255, 255)");
+      const likeSvg = likePath.closest("svg");
+      likeSvg.style.setProperty("color", "rgb(254, 44, 85)");
+      await frames();
+      check("站点更新行内状态色时不会被旧样式覆盖", getComputedStyle(likePath).fill === "rgb(254, 44, 85)");
+      likeSvg.style.removeProperty("color");
+      await frames();
+      check("恢复默认状态色后重新提亮", getComputedStyle(likePath).fill === "rgb(255, 255, 255)");
+      const transparentPath = document.createElementNS("http://www.w3.org/2000/svg", "path");
+      transparentPath.setAttribute("fill", "rgba(0, 0, 0, 0)");
+      likeSvg.appendChild(transparentPath);
+      await frames();
+      check("透明图层不会被填白", getComputedStyle(transparentPath).fill === "rgba(0, 0, 0, 0)");
+      const commentSvg = bar.querySelector("#comment-icon svg");
+      commentSvg.style.marginLeft = "2px";
       check("菜单按钮与工具栏可被鼠标实际命中", [document.querySelector("#more-menu"), bar.querySelector('[data-e2e="like-icon"]')].every(element => {
         const rect = element.getBoundingClientRect();
         const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
@@ -464,6 +493,11 @@
         ![...root.style].some(name => name.startsWith("--tiktok-plus-cinema")));
       check("退出后恢复页面原有尺寸与图标颜色", getComputedStyle(card.querySelector(".DivVideoPlayerContainer")).height === "820px" &&
         getComputedStyle(likePath).fill === "rgb(22, 24, 35)");
+      check("退出后恢复原行内填色且保留站点新增样式", getComputedStyle(commentSvg).fill === "rgba(22, 24, 35, 0.9)" &&
+        commentSvg.style.getPropertyPriority("fill") === "" && commentSvg.style.marginLeft === "2px");
+      check("重建工具栏退出后也不残留改色", !document.querySelector('[class*="tiktok-plus-cinema-ink-"]') &&
+        [...newBar.querySelectorAll("svg, svg *")].every(node =>
+          ["color", "fill", "stroke"].every(name => node.style.getPropertyPriority(name) !== "important")));
       check("退出后仍停留在当前视频", (() => {
         // At the end of the feed scrollTop can clamp before the article reaches the top.
         const rect = rebuiltItem.querySelector("video").getBoundingClientRect();
