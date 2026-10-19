@@ -24,6 +24,7 @@
   .DivMediaCardOverlayBottom { position: absolute; bottom: 8px; left: 8px; right: 8px; z-index: 3; }
   .DivOverlayBottomContent { display: flex; flex-direction: column; align-items: start; }
   .DivCaptionContainer { width: fit-content; max-width: 100%; }
+  .DivVideoClosedCaption { box-sizing: border-box; max-width: min(350px, 100%); padding: 4px 6px; margin-bottom: 4px; }
   .SectionActionBarContainer { color: var(--ui-text-1); }
   .SectionActionBarContainer svg { width: 24px; height: 24px; }
   #like-icon svg { color: rgb(22, 24, 35); fill: currentColor; }
@@ -170,7 +171,7 @@
   };
   window.__fullscreenCalls = fullscreenCalls;
 </script>
-<script src="../tiktok_plus.js?v=1.5.5"></script>
+<script src="../tiktok_plus.js?v=1.5.6"></script>
 <script>
   (async () => {
     const output = document.querySelector("#results");
@@ -287,14 +288,17 @@
       const bar = document.querySelector("#action-bar");
       const root = document.documentElement;
       const originalCaptionAlign = getComputedStyle(document.querySelector("#captions")).textAlign;
+      const originalCaptionMargin = getComputedStyle(document.querySelector("#captions")).marginInline;
       const captionCentered = (caption, player) => {
         const range = document.createRange();
         range.selectNodeContents(caption);
         const playerRect = player.getBoundingClientRect();
+        const captionRect = caption.getBoundingClientRect();
         const lines = [...range.getClientRects()];
-        return lines.length > 0 && lines.every(rect =>
-          Math.abs((rect.left + rect.right) / 2 - (playerRect.left + playerRect.right) / 2) <= 2 &&
-          rect.left >= playerRect.left && rect.right <= playerRect.right);
+        return Math.abs((captionRect.left + captionRect.right) / 2 - (playerRect.left + playerRect.right) / 2) <= 2 &&
+          lines.length > 0 && lines.every(rect =>
+            Math.abs((rect.left + rect.right) / 2 - (playerRect.left + playerRect.right) / 2) <= 2 &&
+            rect.left >= playerRect.left && rect.right <= playerRect.right);
       };
       const popover = () => document.querySelector('[data-e2e="more-menu-popover"]');
       const cinemaOn = () => root.classList.contains("tiktok-plus-cinema-mode");
@@ -447,6 +451,8 @@
       check("闲置后自动隐藏信息浮层与工具栏", idleReached &&
         !visibleInTree(document.querySelector("#video-info")) && !visibleInTree(bar));
       const captions = document.querySelector("#captions");
+      check("字幕保留站点限宽，框体比播放器窄", captions.getBoundingClientRect().width <= 350 &&
+        captions.getBoundingClientRect().width < card.getBoundingClientRect().width);
       check("全屏短字幕相对播放器水平居中", captionCentered(captions, card));
       captions.textContent = "这是一句用于验证多行字幕在播放器底部居中且不溢出的测试字幕。".repeat(5);
       await frames();
@@ -570,6 +576,7 @@
       check("退出后恢复页面原有尺寸与图标颜色", getComputedStyle(card.querySelector(".DivVideoPlayerContainer")).height === "820px" &&
         getComputedStyle(likePath).fill === "rgb(22, 24, 35)");
       check("退出全屏恢复字幕原有对齐方式", getComputedStyle(captions).textAlign === originalCaptionAlign);
+      check("退出全屏恢复字幕框原有外边距", getComputedStyle(captions).marginInline === originalCaptionMargin);
       check("退出后恢复原行内填色且保留站点新增样式", getComputedStyle(commentSvg).fill === "rgba(22, 24, 35, 0.9)" &&
         commentSvg.style.getPropertyPriority("fill") === "" && commentSvg.style.marginLeft === "2px");
       check("重建工具栏退出后也不残留改色", !document.querySelector('[class*="tiktok-plus-cinema-ink-"]') &&
