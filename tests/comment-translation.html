@@ -52,7 +52,14 @@
         <div class="DivMediaCardOverlayTop">
           <button data-e2e="more-menu-icon" id="more-menu" aria-haspopup="dialog">⋯</button>
         </div>
-        <div class="DivMediaCardOverlayBottom" id="video-info">作者信息</div>
+        <div class="DivMediaCardOverlayBottomSection"><div class="DivMediaCardOverlayBottom">
+          <div class="DivOverlayBottomContent">
+            <div class="DivCaptionContainer"><div class="DivVideoClosedCaption" id="captions">测试字幕</div></div>
+            <div class="DivCreatorInfoContainer" id="video-info">作者信息</div>
+            <div class="DivMediaCardDescriptionContainer">视频描述</div>
+          </div>
+          <div class="DivOverlayBottomCornerControls"><button>底部控件</button></div>
+        </div></div>
       </section>
       <section class="SectionActionBarContainer" id="action-bar">
         <div role="button" tabindex="0" data-e2e="like-icon" id="like-icon" aria-pressed="false"><svg viewBox="0 0 24 24"><path fill="currentColor" d="M2 2h20v20H2z"/></svg><strong data-e2e="like-count">284.5K</strong></div>
@@ -161,7 +168,7 @@
   };
   window.__fullscreenCalls = fullscreenCalls;
 </script>
-<script src="../tiktok_plus.js?v=1.5.3"></script>
+<script src="../tiktok_plus.js?v=1.5.4"></script>
 <script>
   (async () => {
     const output = document.querySelector("#results");
@@ -417,15 +424,38 @@
       reveal();
       let idleReached = false;
       await until(() => root.classList.contains("tiktok-plus-cinema-mode-idle"), 8).then(() => { idleReached = true; }, () => {});
-      await frames(20);
+      await until(() => Number(getComputedStyle(bar).opacity) === 0);
+      const visibleInTree = target => {
+        for (let element = target; element; element = element.parentElement) {
+          const style = getComputedStyle(element);
+          if (style.display === "none" || style.visibility === "hidden" || Number(style.opacity) === 0) return false;
+        }
+        return target.getBoundingClientRect().width > 0;
+      };
       check("闲置后自动隐藏信息浮层与工具栏", idleReached &&
-        Number(getComputedStyle(document.querySelector("#video-info")).opacity) === 0 &&
-        Number(getComputedStyle(bar).opacity) === 0);
+        !visibleInTree(document.querySelector("#video-info")) && !visibleInTree(bar));
+      const captions = document.querySelector("#captions");
+      check("闲置时字幕及其祖先保持可见", visibleInTree(captions));
+      check("闲置时描述与底部控件仍隐藏", [...card.querySelectorAll(
+        '.DivMediaCardDescriptionContainer, .DivOverlayBottomCornerControls')].every(element =>
+          Number(getComputedStyle(element).opacity) === 0 && getComputedStyle(element).pointerEvents === "none"));
+      captions.textContent = "下一句字幕";
+      await frames();
+      check("闲置期间字幕更新不被隐藏", visibleInTree(captions));
+      const captionContainer = captions.parentElement;
+      const captionParent = captionContainer.parentElement;
+      captionContainer.remove();
+      await frames();
+      captionParent.prepend(captionContainer);
+      await frames();
+      check("闲置期间重新挂载的字幕保持可见", visibleInTree(captions));
       key(document.body, "ArrowRight", "ArrowRight");
       check("快进快捷键也会恢复控件", !root.classList.contains("tiktok-plus-cinema-mode-idle"));
       reveal();
       await frames(2);
       check("鼠标活动后立即恢复显示", !root.classList.contains("tiktok-plus-cinema-mode-idle"));
+      await until(() => Number(getComputedStyle(document.querySelector("#video-info")).opacity) === 1);
+      check("唤醒后恢复作者信息且字幕仍可见", visibleInTree(captions));
 
       for (const railClass of ["AsideOneColumnSidebar", "RightPanelContainer"]) {
         const rail = document.querySelector("#right-panel");

@@ -2,7 +2,7 @@
 // @name         TikTok Plus
 // @name:zh-CN   TikTok Plus
 // @namespace    https://github.com/nukewarrior/tiktok_plus
-// @version      1.5.3
+// @version      1.5.4
 // @description  Keyboard shortcuts, individual and continuous comment translation for TikTok.
 // @description:zh-CN  为 TikTok 添加键盘快捷键、评论逐条翻译和翻译全部。
 // @author       nukewarrior
@@ -18,7 +18,7 @@
 (function () {
   "use strict";
 
-  const SCRIPT_VERSION = "1.5.3";
+  const SCRIPT_VERSION = "1.5.4";
   const SEEK_SECONDS = 5;
   const COMMENT_SELECTOR = '[data-e2e="comment-level-1"], [data-e2e="comment-level-2"]';
   const INTERACTIVE_SELECTOR = 'button, a, [role="button"], [tabindex]';
@@ -393,11 +393,20 @@
       object-fit: contain !important;
     }
 
-    html.tiktok-plus-cinema-mode .tiktok-plus-cinema-chrome {
+    /* Captions share the bottom overlay with metadata; fade only their sibling content. */
+    html.tiktok-plus-cinema-mode :is(
+      .tiktok-plus-cinema-chrome:not([class*="DivMediaCardOverlayBottom"]),
+      .tiktok-plus-cinema-chrome [class*="DivOverlayBottomContent"] > :not([class*="DivCaptionContainer"]),
+      .tiktok-plus-cinema-chrome [class*="DivOverlayBottomCornerControls"]
+    ) {
       transition: opacity 200ms ease;
     }
 
-    html.tiktok-plus-cinema-mode.tiktok-plus-cinema-mode-idle .tiktok-plus-cinema-chrome {
+    html.tiktok-plus-cinema-mode.tiktok-plus-cinema-mode-idle :is(
+      .tiktok-plus-cinema-chrome:not([class*="DivMediaCardOverlayBottom"]),
+      .tiktok-plus-cinema-chrome [class*="DivOverlayBottomContent"] > :not([class*="DivCaptionContainer"]),
+      .tiktok-plus-cinema-chrome [class*="DivOverlayBottomCornerControls"]
+    ) {
       opacity: 0 !important;
       pointer-events: none !important;
     }
@@ -408,7 +417,11 @@
     }
 
     @media (prefers-reduced-motion: reduce) {
-      html.tiktok-plus-cinema-mode .tiktok-plus-cinema-chrome {
+      html.tiktok-plus-cinema-mode :is(
+        .tiktok-plus-cinema-chrome:not([class*="DivMediaCardOverlayBottom"]),
+        .tiktok-plus-cinema-chrome [class*="DivOverlayBottomContent"] > :not([class*="DivCaptionContainer"]),
+        .tiktok-plus-cinema-chrome [class*="DivOverlayBottomCornerControls"]
+      ) {
         transition: none;
       }
     }
