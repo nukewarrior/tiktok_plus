@@ -26,7 +26,7 @@
   .SectionActionBarContainer svg { width: 24px; height: 24px; }
   #like-icon svg { color: rgb(22, 24, 35); fill: currentColor; }
   #like-icon strong { color: rgb(22, 24, 35); }
-  #media-card-row { display: flex; gap: 16px; height: 100%; justify-content: center; align-items: center; }
+  .DivContentFlexLayout { display: flex; gap: 16px; height: 100%; justify-content: center; align-items: center; }
   #bulk-panel { position: fixed; top: 250px; right: 12px; width: 420px; max-height: 480px; overflow: auto; background: Canvas; border: 1px solid GrayText; }
   #bulk-panel [class="DivCommentHeader"] { display: flex; align-items: center; padding: 8px; }
 </style>
@@ -62,7 +62,8 @@
     </div>
   </article>
 </div>
-<aside id="right-panel" class="RightPanelContainer" hidden></aside>
+<aside id="right-panel" class="AsideOneColumnSidebar" hidden></aside>
+<aside id="navigation-sidebar" class="AsideNavigation">导航</aside>
 </div>
 <div id="popover-portal"></div>
 <button data-e2e="cinema-mode-entry" id="fullscreen">全屏</button>
@@ -124,9 +125,10 @@
     panel.hidden = !panel.hidden;
     let list = panel.querySelector(".DivCommentListContainer");
     if (!panel.hidden && !list) {
-      list = document.createElement("div");
-      list.className = "DivCommentListContainer";
-      panel.appendChild(list);
+      panel.innerHTML = '<div class="DivCommentSidebarTransitionWrapper"><section class="SectionCommentSidebarContainer"><button id="close-comments">关闭评论</button><div class="DivCommentListContainer">评论内容</div></section></div>';
+      panel.querySelector("#close-comments").addEventListener("click", () => {
+        document.querySelector("#comment-icon").click();
+      });
     }
     panel.querySelectorAll(".DivCommentListContainer").forEach(node => {
       node.hidden = panel.hidden;
@@ -159,7 +161,7 @@
   };
   window.__fullscreenCalls = fullscreenCalls;
 </script>
-<script src="../tiktok_plus.js?v=1.5.2"></script>
+<script src="../tiktok_plus.js?v=1.5.3"></script>
 <script>
   (async () => {
     const output = document.querySelector("#results");
@@ -425,26 +427,39 @@
       await frames(2);
       check("鼠标活动后立即恢复显示", !root.classList.contains("tiktok-plus-cinema-mode-idle"));
 
-      document.querySelector("#comment-icon").click();
-      await frames(6);
-      check("打开评论后扣除右侧栏宽度重新居中", (() => {
-        const cardRect = card.getBoundingClientRect();
-        const barRect = bar.getBoundingClientRect();
-        const railWidth = document.querySelector("#right-panel").getBoundingClientRect().width;
-        const freeCenter = (window.innerWidth - railWidth) / 2;
-        const groupCenter = (cardRect.left + barRect.right) / 2;
-        return root.classList.contains("tiktok-plus-cinema-mode-comments") &&
-          railWidth > 0 && Math.abs(groupCenter - freeCenter) <= 2;
-      })());
-      document.querySelector("#comment-icon").click();
-      await frames(6);
-      check("关闭评论后恢复全宽居中", (() => {
-        const cardRect = card.getBoundingClientRect();
-        const barRect = bar.getBoundingClientRect();
-        const groupCenter = (cardRect.left + barRect.right) / 2;
-        return !root.classList.contains("tiktok-plus-cinema-mode-comments") &&
-          Math.abs(groupCenter - window.innerWidth / 2) <= 2;
-      })());
+      for (const railClass of ["AsideOneColumnSidebar", "RightPanelContainer"]) {
+        const rail = document.querySelector("#right-panel");
+        rail.className = railClass;
+        for (const trigger of ["click", "KeyX"]) {
+          if (trigger === "click") document.querySelector("#comment-icon").click();
+          else key(document.body, "KeyX", "x");
+          await frames(6);
+          check(`${railClass} ${trigger} 打开评论后扣除右侧栏宽度重新居中`, (() => {
+            const cardRect = card.getBoundingClientRect();
+            const barRect = bar.getBoundingClientRect();
+            const railWidth = rail.getBoundingClientRect().width;
+            const freeCenter = (window.innerWidth - railWidth) / 2;
+            const groupCenter = (cardRect.left + barRect.right) / 2;
+            return root.classList.contains("tiktok-plus-cinema-mode-comments") &&
+              railWidth > 0 && Math.abs(groupCenter - freeCenter) <= 2;
+          })());
+          const close = rail.querySelector("#close-comments");
+          const rect = close.getBoundingClientRect();
+          const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+          check(`${railClass} ${trigger} 评论栏可见且关闭按钮可被鼠标命中`,
+            !!hit && (hit === close || close.contains(hit)));
+          check("全屏打开评论时导航侧栏仍隐藏", getComputedStyle(document.querySelector("#navigation-sidebar")).display === "none");
+          close.click();
+          await frames(6);
+          check(`${railClass} ${trigger} 关闭评论后恢复全宽居中`, (() => {
+            const cardRect = card.getBoundingClientRect();
+            const barRect = bar.getBoundingClientRect();
+            const groupCenter = (cardRect.left + barRect.right) / 2;
+            return !root.classList.contains("tiktok-plus-cinema-mode-comments") &&
+              Math.abs(groupCenter - window.innerWidth / 2) <= 2;
+          })());
+        }
+      }
 
       document.querySelector("#next-video").hidden = true;
       document.querySelector("#previous-video").hidden = true;
@@ -481,9 +496,17 @@
       document.querySelector("#next-video").hidden = false;
       document.querySelector("#previous-video").hidden = false;
 
+      const commentRail = document.querySelector("#right-panel");
+      commentRail.className = "AsideOneColumnSidebar";
+      document.querySelector("#comment-icon").click();
+      await frames(6);
       key(document.body, "KeyH", "h");
       await flush();
       check("H 退出全屏并调用 exitFullscreen", calls.at(-1) === "exit" && !document.fullscreenElement);
+      check("退出全屏保留已打开的评论并恢复导航侧栏", !commentRail.hidden &&
+        getComputedStyle(commentRail).display !== "none" &&
+        getComputedStyle(document.querySelector("#navigation-sidebar")).display !== "none");
+      commentRail.querySelector("#close-comments").click();
       check("退出后完全清理布局", !cinemaOn() && !card.className.includes("tiktok-plus-cinema") &&
         !bar.className.includes("tiktok-plus-cinema") &&
         !document.querySelector("#video-article").className.includes("tiktok-plus-cinema") &&

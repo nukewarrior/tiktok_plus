@@ -2,7 +2,7 @@
 // @name         TikTok Plus
 // @name:zh-CN   TikTok Plus
 // @namespace    https://github.com/nukewarrior/tiktok_plus
-// @version      1.5.2
+// @version      1.5.3
 // @description  Keyboard shortcuts, individual and continuous comment translation for TikTok.
 // @description:zh-CN  为 TikTok 添加键盘快捷键、评论逐条翻译和翻译全部。
 // @author       nukewarrior
@@ -18,7 +18,7 @@
 (function () {
   "use strict";
 
-  const SCRIPT_VERSION = "1.5.2";
+  const SCRIPT_VERSION = "1.5.3";
   const SEEK_SECONDS = 5;
   const COMMENT_SELECTOR = '[data-e2e="comment-level-1"], [data-e2e="comment-level-2"]';
   const INTERACTIVE_SELECTOR = 'button, a, [role="button"], [tabindex]';
@@ -40,7 +40,7 @@
   const CINEMA_ACTION_BAR_SELECTOR = '[class*="SectionActionBarContainer"]';
   const CINEMA_ACTION_BAR_FALLBACK_SELECTOR = '[data-e2e="like-icon"], [data-e2e="comment-icon"]';
   const CINEMA_COMMENT_PANEL_SELECTOR = '[class*="DivCommentListContainer"]';
-  const CINEMA_RAIL_SELECTOR = '[class*="RightPanelContainer"]';
+  const CINEMA_RAIL_SELECTOR = '[class*="RightPanelContainer"], [class*="AsideOneColumnSidebar"]';
   const CINEMA_INFO_SELECTOR = '[class*="DivMediaCardOverlayBottom"]';
   const CINEMA_TOP_SELECTOR = '[class*="DivMediaCardOverlayTop"]';
   const CINEMA_PROGRESS_SELECTOR = '[class*="DivVideoProgressContainer"]';
@@ -207,12 +207,13 @@
 
     /* TikTok keeps several side-nav variants (loaded, placeholder, and loading skeleton), and the
        skeleton alone reserves 240px. Match the whole family plus the sidebar slot so the cinema
-       layer really is the full width. */
+       layer really is the full width. The one-column sidebar also hosts comments, so its
+       visibility is handled with the right rail below. */
     html.tiktok-plus-cinema-mode #app-header,
     html.tiktok-plus-cinema-mode #fixed-top-container,
     html.tiktok-plus-cinema-mode [class*="DivFixedTopContainer"],
     html.tiktok-plus-cinema-mode [class*="SideNav"],
-    html.tiktok-plus-cinema-mode [class*="Aside"] {
+    html.tiktok-plus-cinema-mode [class*="Aside"]:not([class*="AsideOneColumnSidebar"]) {
       display: none !important;
     }
 
@@ -220,6 +221,7 @@
        only the inner panel leaves that row reserving its width and pushes the player off centre,
        so hide the whole rail slot while comments are closed. */
     html.tiktok-plus-cinema-mode:not(.tiktok-plus-cinema-mode-comments) [class*="RightPanelContainer"],
+    html.tiktok-plus-cinema-mode:not(.tiktok-plus-cinema-mode-comments) [class*="AsideOneColumnSidebar"],
     html.tiktok-plus-cinema-mode:not(.tiktok-plus-cinema-mode-comments) [class*="DivVideoListTabBarWrapper"],
     html.tiktok-plus-cinema-mode:not(.tiktok-plus-cinema-mode-comments) [class*="StyledContentWrapper"],
     html.tiktok-plus-cinema-mode:not(.tiktok-plus-cinema-mode-comments) [class*="DivRelatedTabContainer"] {
@@ -230,6 +232,7 @@
        the player is centred in matches the rail's measured width exactly. */
     html.tiktok-plus-cinema-mode.tiktok-plus-cinema-mode-comments [class*="StyledContentWrapper"],
     html.tiktok-plus-cinema-mode.tiktok-plus-cinema-mode-comments [class*="DivVideoListTabBarWrapper"],
+    html.tiktok-plus-cinema-mode.tiktok-plus-cinema-mode-comments [class*="AsideOneColumnSidebar"],
     html.tiktok-plus-cinema-mode.tiktok-plus-cinema-mode-comments [class*="RightPanelContainer"] {
       padding: 0 !important;
       margin: 0 !important;
