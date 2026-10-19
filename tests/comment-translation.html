@@ -8,10 +8,17 @@
   article { padding: 12px; margin: 8px 0; border: 1px solid GrayText; }
   #results { white-space: pre-wrap; }
   video { position: fixed; top: 12px; right: 12px; width: 200px; height: 80px; }
-  #open-comments { position: fixed; top: 100px; right: 12px; }
   #fullscreen { position: fixed; top: 132px; right: 12px; }
   #next-video { position: fixed; top: 164px; right: 12px; }
   #previous-video { position: fixed; top: 196px; right: 12px; }
+  /* Mirror TikTok's app shell: one full-viewport flex row holding the scrollable column list
+     and the right rail, so cinema-mode centering behaves like the real page. */
+  #content { position: fixed; inset: 0; display: flex; width: 100vw; height: 100vh; }
+  #right-panel { flex: 0 0 320px; width: 320px; height: 100%; background: Canvas; }
+  #right-panel[hidden] { display: none; }
+  #column-list-container { flex: 1 1 auto; min-width: 0; height: 100%; overflow: auto; }
+  #video-article { height: 100%; }
+  #media-card-row { display: flex; gap: 16px; height: 100%; justify-content: center; align-items: center; }
   #bulk-panel { position: fixed; top: 250px; right: 12px; width: 420px; max-height: 480px; overflow: auto; background: Canvas; border: 1px solid GrayText; }
   #bulk-panel [class="DivCommentHeader"] { display: flex; align-items: center; padding: 8px; }
 </style>
@@ -25,10 +32,31 @@
   <div class="DivCommentHeader"><span>评论</span><div class="DivCloseButtonWrapper"><button aria-label="exit">×</button></div></div>
   <div id="bulk-comments"></div>
 </section>
-<section id="player-card" data-e2e="feed-video" aria-label="Watch in full screen">
-  <video></video>
-</section>
-<button data-e2e="comment-icon" id="open-comments">评论区</button>
+<!-- Mirrors TikTok's real tree: cards live inside a scrollable column list, each card is an
+     article whose flex row holds the media card and the action bar as siblings, and the
+     more-menu popover is portalled outside all of it. -->
+<div id="content">
+<div id="column-list-container">
+  <article class="ArticleItemContainer" id="video-article">
+    <div id="media-card-row" class="DivContentFlexLayout">
+      <section id="player-card" data-e2e="feed-video" aria-label="Watch in full screen">
+        <video></video>
+        <div class="DivMediaCardOverlayTop">
+          <button data-e2e="more-menu-icon" id="more-menu" aria-haspopup="dialog">⋯</button>
+        </div>
+        <div class="DivMediaCardOverlayBottom" id="video-info">作者信息</div>
+      </section>
+      <section class="SectionActionBarContainer" id="action-bar">
+        <div role="button" tabindex="0" data-e2e="like-icon" id="like-icon" aria-pressed="false">❤</div>
+        <div role="button" tabindex="0" data-e2e="comment-icon" id="comment-icon">💬</div>
+        <div role="button" tabindex="0" data-e2e="favorite-icon" id="favorite-icon">🔖</div>
+      </section>
+    </div>
+  </article>
+</div>
+<aside id="right-panel" class="RightPanelContainer" hidden></aside>
+</div>
+<div id="popover-portal"></div>
 <button data-e2e="cinema-mode-entry" id="fullscreen">全屏</button>
 <button aria-label="Next" id="next-video">下一个</button>
 <button aria-label="Previous" id="previous-video">上一个</button>
@@ -60,6 +88,42 @@
   // harness reproduces it to prove the shortcut never treats the card as a fullscreen control.
   window.__cardClicks = 0;
   document.querySelector("#player-card").addEventListener("click", () => window.__cardClicks++);
+  // The real more-menu popover is teleported outside the media card, which is exactly why it
+  // stayed invisible back when only the card was fullscreened. Reproduce that topology here.
+  const portal = document.querySelector("#popover-portal");
+  const moreMenu = document.querySelector("#more-menu");
+  let popover = null;
+  moreMenu.addEventListener("click", () => {
+    if (popover) { popover.remove(); popover = null; return; }
+    popover = document.createElement("div");
+    popover.className = "TUXPopover-popover TUXPopover-popover--open";
+    popover.setAttribute("data-e2e", "more-menu-popover");
+    popover.setAttribute("role", "dialog");
+    popover.style.cssText = "position:absolute;z-index:4000;left:0;top:0;width:200px;height:100px;";
+    popover.innerHTML = '<button type="button" data-e2e="more-menu-popover_speed-flat-1.5">1.5</button>';
+    popover.addEventListener("click", event => {
+      if (event.target.closest('[data-e2e="more-menu-popover_speed-flat-1.5"]')) {
+        window.__userRate = 1.5;
+      }
+    });
+    portal.appendChild(popover);
+  });
+  window.__popover = () => popover;
+  window.__userRate = 1;
+  // Opening comments mounts the right rail the same way TikTok does.
+  document.querySelector("#comment-icon").addEventListener("click", () => {
+    const panel = document.querySelector("#right-panel");
+    panel.hidden = !panel.hidden;
+    let list = panel.querySelector(".DivCommentListContainer");
+    if (!panel.hidden && !list) {
+      list = document.createElement("div");
+      list.className = "DivCommentListContainer";
+      panel.appendChild(list);
+    }
+    panel.querySelectorAll(".DivCommentListContainer").forEach(node => {
+      node.hidden = panel.hidden;
+    });
+  });
   // Fake the Fullscreen API so request/exit behaviour is asserted deterministically.
   const fullscreenCalls = [];
   let fakeFullscreenElement = null;
@@ -80,15 +144,25 @@
     document.dispatchEvent(new Event("fullscreenchange"));
     return Promise.resolve();
   };
+  // Browsers drop fullscreen on their own (Escape, OS gesture) without calling exitFullscreen.
+  window.__browserExit = () => {
+    fakeFullscreenElement = null;
+    document.dispatchEvent(new Event("fullscreenchange"));
+  };
   window.__fullscreenCalls = fullscreenCalls;
 </script>
-<script src="../tiktok_plus.js?v=1.4.1"></script>
+<script src="../tiktok_plus.js?v=1.5.0"></script>
 <script>
   (async () => {
     const output = document.querySelector("#results");
     const passed = [];
     const requests = window.__tiktokRequests;
     const flush = () => new Promise(resolve => setTimeout(resolve, 0));
+    // Cinema layout runs inside requestAnimationFrame, so effects land one frame later.
+    const frames = (count = 2) => new Promise(resolve => {
+      const tick = () => (count-- <= 0 ? resolve() : requestAnimationFrame(tick));
+      requestAnimationFrame(tick);
+    });
     const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
     const until = async (predicate, seconds = 5) => {
       const deadline = performance.now() + seconds * 1000;
@@ -191,33 +265,128 @@
 
       const calls = window.__fullscreenCalls;
       const card = document.querySelector("#player-card");
+      const bar = document.querySelector("#action-bar");
+      const root = document.documentElement;
+      const popover = () => document.querySelector('[data-e2e="more-menu-popover"]');
+      const cinemaOn = () => root.classList.contains("tiktok-plus-cinema-mode");
+      const reveal = () => document.dispatchEvent(new Event("pointermove", { bubbles: true }));
       let fullscreenControlClicks = 0;
       document.querySelector("#fullscreen").addEventListener("click", () => fullscreenControlClicks++);
       const clickedControl = () => window.__cardClicks === 0 && fullscreenControlClicks === 0;
+
+      // The idle timer keeps the chrome up while the video is paused, so simulate playback.
+      Object.defineProperty(document.querySelector("#player-card video"), "paused",
+        { configurable: true, get: () => false });
+      Object.defineProperty(document.querySelector("#player-card video"), "videoWidth",
+        { configurable: true, get: () => 1080 });
+      Object.defineProperty(document.querySelector("#player-card video"), "videoHeight",
+        { configurable: true, get: () => 1920 });
+
       key(document.body, "KeyF", "f");
       await flush();
-      check("F 通过 Fullscreen API 进入播放器全屏", calls.length === 1 && calls[0] === card &&
-        card.classList.contains("tiktok-plus-fs-card"));
-      check("进入全屏不点击媒体卡片或旧影院控件", document.fullscreenElement === card && clickedControl());
+      check("F 让整个文档进入全屏而非单个播放器卡片", calls.length === 1 && calls[0] === root &&
+        document.fullscreenElement === root);
+      check("卡片与工具栏都进入影院布局", cinemaOn() && card.classList.contains("tiktok-plus-cinema-card") &&
+        bar.classList.contains("tiktok-plus-cinema-bar"));
+      check("卡片保持文档流布局以保证菜单定位", (() => {
+        // TikTok positions the popover from the button's flow coordinates, so the card must not
+        // be taken out of flow.
+        const position = getComputedStyle(card).position;
+        return position !== "fixed" && position !== "absolute";
+      })());
+      check("文章与弹性行加影院标记", document.querySelector("#video-article")
+        .classList.contains("tiktok-plus-cinema-article") &&
+        document.querySelector("#media-card-row").classList.contains("tiktok-plus-cinema-flex"));
+      check("进入全屏不点击媒体卡片或旧影院控件", clickedControl());
+      check("工具栏位于全屏子树内", root.contains(bar) && document.fullscreenElement.contains(bar));
+      check("卡片按视频比例居中并扣除工具栏宽度", (() => {
+        const cardRect = card.getBoundingClientRect();
+        const barRect = bar.getBoundingClientRect();
+        const expectedRatio = 1080 / 1920;
+        const ratioOk = Math.abs(cardRect.width / cardRect.height - expectedRatio) < 0.02;
+        const gapOk = barRect.left >= cardRect.right;
+        return ratioOk && gapOk && cardRect.width > 1 && cardRect.height > 1;
+      })());
+
+      // The portalled popover is the regression this change exists for: it lived outside the
+      // card's fullscreen subtree, so it rendered nowhere and swallowed clicks.
+      document.querySelector("#more-menu").click();
+      await flush();
+      check("「⋯」菜单被传送到卡片子树之外（复现原始缺陷结构）", !!popover() && !card.contains(popover()));
+      check("全屏时菜单弹层仍在全屏子树内", root.contains(popover()));
+      check("全屏时菜单项可被真实命中", (() => {
+        const item = popover().querySelector('[data-e2e="more-menu-popover_speed-flat-1.5"]');
+        const box = item.getBoundingClientRect();
+        // elementFromPoint proves paint + hit-testing, unlike .click() which works even when
+        // the node is invisible outside the fullscreen subtree.
+        const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+        return !!hit && (hit === item || item.contains(hit));
+      })());
+      check("菜单打开期间不进入闲置隐藏", await (async () => {
+        await wait(3000);
+        return !root.classList.contains("tiktok-plus-cinema-mode-idle");
+      })());
+      document.querySelector("#more-menu").click();
+      await flush();
+      check("再次点击「⋯」关闭菜单", !popover());
+
+      reveal();
+      let idleReached = false;
+      await until(() => root.classList.contains("tiktok-plus-cinema-mode-idle"), 8).then(() => { idleReached = true; }, () => {});
+      await frames(20);
+      check("闲置后自动隐藏信息浮层与工具栏", idleReached &&
+        Number(getComputedStyle(document.querySelector("#video-info")).opacity) === 0 &&
+        Number(getComputedStyle(bar).opacity) === 0);
+      reveal();
+      await frames(2);
+      check("鼠标活动后立即恢复显示", !root.classList.contains("tiktok-plus-cinema-mode-idle"));
+
+      document.querySelector("#comment-icon").click();
+      await frames(6);
+      check("打开评论后扣除右侧栏宽度重新居中", (() => {
+        const cardRect = card.getBoundingClientRect();
+        const barRect = bar.getBoundingClientRect();
+        const railWidth = document.querySelector("#right-panel").getBoundingClientRect().width;
+        const freeCenter = (window.innerWidth - railWidth) / 2;
+        const groupCenter = (cardRect.left + barRect.right) / 2;
+        return root.classList.contains("tiktok-plus-cinema-mode-comments") &&
+          railWidth > 0 && Math.abs(groupCenter - freeCenter) <= 2;
+      })());
+      document.querySelector("#comment-icon").click();
+      await frames(6);
+      check("关闭评论后恢复全宽居中", (() => {
+        const cardRect = card.getBoundingClientRect();
+        const barRect = bar.getBoundingClientRect();
+        const groupCenter = (cardRect.left + barRect.right) / 2;
+        return Math.abs(groupCenter - window.innerWidth / 2) <= 2;
+      })());
+
       key(document.body, "KeyH", "h");
       await flush();
-      check("H 退出全屏并调用 exitFullscreen", calls.length === 2 && calls[1] === "exit" &&
-        !document.fullscreenElement);
-      check("退出后清理布局类", !card.className.includes("tiktok-plus-fs-"));
+      check("H 退出全屏并调用 exitFullscreen", calls.at(-1) === "exit" && !document.fullscreenElement);
+      check("退出后完全清理布局", !cinemaOn() && !card.className.includes("tiktok-plus-cinema") &&
+        !bar.className.includes("tiktok-plus-cinema") &&
+        !document.querySelector("#video-article").className.includes("tiktok-plus-cinema") &&
+        !document.querySelector("#media-card-row").className.includes("tiktok-plus-cinema") &&
+        !document.querySelector(".tiktok-plus-cinema-backdrop") &&
+        ![...root.style].some(name => name.startsWith("--tiktok-plus-cinema")));
 
       window.__denyFullscreen = true;
       key(document.body, "KeyF", "f");
       await flush();
       check("API 被拒绝时退回点击原生全屏控件", fullscreenControlClicks === 1 && !document.fullscreenElement);
-      check("兜底失败后不残留布局类", !document.querySelector(".tiktok-plus-fs-card, .tiktok-plus-fs-video"));
+      check("兜底失败后不残留影院布局", !cinemaOn() &&
+        !document.querySelector(".tiktok-plus-cinema-backdrop, .tiktok-plus-cinema-card"));
       window.__denyFullscreen = false;
 
-      // Firefox/Safari can exit fullscreen themselves (Escape, OS gesture); the layout classes
+      // Firefox/Safari can exit fullscreen themselves (Escape, OS gesture); the cinema layout
       // must be dropped even when the script did not run the exit itself.
-      card.classList.add("tiktok-plus-fs-card");
-      document.dispatchEvent(new Event("fullscreenchange"));
+      key(document.body, "KeyF", "f");
       await flush();
-      check("浏览器自行退出时同步清理布局类", !card.className.includes("tiktok-plus-fs-"));
+      check("再次进入影院模式", cinemaOn() && !!document.fullscreenElement);
+      window.__browserExit();
+      await flush();
+      check("浏览器自行退出时同步清理影院布局", !cinemaOn() && !card.className.includes("tiktok-plus-cinema"));
 
       const panel = document.querySelector("#bulk-panel");
       const list = document.querySelector("#bulk-comments");

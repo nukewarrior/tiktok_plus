@@ -13,7 +13,7 @@ Add keyboard shortcuts, individual comment translation, and continuous bulk tran
 | `Space` | Play or pause the current video |
 | `↑` / `↓` | Go to the previous / next video |
 | `←` / `→` | Seek backward / forward by 5 seconds |
-| `H` / `F` | Toggle player fullscreen |
+| `H` / `F` | Cinema fullscreen (includes the action bar) |
 | `Esc` | Exit fullscreen, or close the shortcut panel if it is open |
 
 ### Interactions
@@ -47,12 +47,17 @@ Add keyboard shortcuts, individual comment translation, and continuous bulk tran
 - Most shortcuts are disabled while an editable field is focused to avoid interfering with typing. `Esc`, `Shift + F`, and `Shift + ?` still work.
 - Interaction shortcuts rely on controls available on the current TikTok page. A TikTok UI update may require adapting individual shortcuts.
 
-### Fullscreen
+### Cinema fullscreen
 
-- `H` / `F` takes the player card of the current video fullscreen through the Fullscreen API; press it again or press `Esc` to exit.
-- The video keeps its original aspect ratio: portrait videos get pillarboxing and landscape videos get letterboxing, so nothing is stretched or cropped.
-- TikTok currently paints frames on a super-resolution canvas layer and keeps the `<video>` element transparent. While fullscreen, the script switches back to the video layer and frames it with `contain`, then restores everything on exit without disturbing the page's own player.
-- If the browser rejects the fullscreen request (for example without a user gesture or due to site policy), the script falls back to clicking the page's own fullscreen control. When neither works it reports `Fullscreen not allowed` instead of failing silently.
+- `H` / `F` enters cinema fullscreen: the whole page goes fullscreen and the current player card is laid out next to the action bar on black. Press it again or press `Esc` to exit.
+- The video keeps its original aspect ratio: portrait videos get pillarboxing and landscape videos get letterboxing, so nothing is stretched or cropped. The layout recomputes on resize and when the video changes.
+- The action bar (avatar and follow, like, comment, favorite, share, music) is visible and clickable in fullscreen, with the same behaviour as on the page.
+- The “⋯” menu works in fullscreen: playback speed, mini player, captions, not interested, and report all open and respond to clicks. Previously only the player card went fullscreen, while TikTok portals that menu outside the card, so clicking it appeared to do nothing; fullscreening the document keeps the popover inside the fullscreen subtree.
+- The bottom-left video info and the action bar fade out after about 2.4 seconds without interaction and return on mouse movement, click, wheel, or key press. They stay visible while the video is paused, a menu is open, the shortcut panel is open, a text field is focused, or the pointer rests on the info area or the bar.
+- Pressing `X` opens comments inside fullscreen: the comment rail renders normally and the player plus action bar re-center in the remaining space, then recenter again when comments close.
+- The page's own navigation, sidebars, and recommendation rail are hidden while fullscreen and fully restored on exit, without disturbing the page's player.
+- TikTok currently paints frames on a super-resolution canvas layer and keeps the `<video>` element transparent. While fullscreen, the script switches back to the video layer and frames it with `contain`.
+- If the browser rejects the fullscreen request (for example without a user gesture or due to site policy), the script falls back to clicking the page's own fullscreen control. When neither works it reports `Fullscreen not allowed` instead of failing silently, and leaves no fullscreen layout behind.
 
 ## Comment translation
 
@@ -69,7 +74,7 @@ Add keyboard shortcuts, individual comment translation, and continuous bulk tran
 
 ## Verification
 
-Open [`tests/comment-translation.html`](tests/comment-translation.html) in a browser to run translation interaction and shortcut regression checks automatically. Responses are mocked; no requests are sent to Google. Refresh to rerun. This does not replace acceptance testing on TikTok with an actual userscript manager.
+Open [`tests/comment-translation.html`](tests/comment-translation.html) in a browser to run translation interaction, shortcut, and cinema-fullscreen regression checks automatically. Responses are mocked; no requests are sent to Google. Refresh to rerun. The fullscreen cases mirror TikTok's real topology — the action bar is a sibling of the media card, and the menu popover is portalled outside the card's subtree — and assert that menu items are actually hit-tested with `document.elementFromPoint`, not merely that `.click()` fires. This does not replace acceptance testing on TikTok with an actual userscript manager.
 
 ## License
 
