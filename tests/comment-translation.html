@@ -171,7 +171,7 @@
   };
   window.__fullscreenCalls = fullscreenCalls;
 </script>
-<script src="../tiktok_plus.js?v=1.5.6"></script>
+<script src="../tiktok_plus.js?v=1.5.7"></script>
 <script>
   (async () => {
     const output = document.querySelector("#results");
@@ -287,8 +287,6 @@
       const card = document.querySelector("#player-card");
       const bar = document.querySelector("#action-bar");
       const root = document.documentElement;
-      const originalCaptionAlign = getComputedStyle(document.querySelector("#captions")).textAlign;
-      const originalCaptionMargin = getComputedStyle(document.querySelector("#captions")).marginInline;
       const captionCentered = (caption, player) => {
         const range = document.createRange();
         range.selectNodeContents(caption);
@@ -306,6 +304,14 @@
       let fullscreenControlClicks = 0;
       document.querySelector("#fullscreen").addEventListener("click", () => fullscreenControlClicks++);
       const clickedControl = () => window.__cardClicks === 0 && fullscreenControlClicks === 0;
+
+      const pageCaptions = document.querySelector("#captions");
+      check("非全屏短字幕及字幕框居中", captionCentered(pageCaptions, card));
+      pageCaptions.textContent = "非全屏多行字幕同样应在播放器中水平居中，保留站点的字幕框限宽。".repeat(5);
+      check("非全屏多行字幕逐行居中且不溢出", pageCaptions.getBoundingClientRect().height >
+        parseFloat(getComputedStyle(pageCaptions).lineHeight) && captionCentered(pageCaptions, card));
+      pageCaptions.textContent = "测试字幕";
+      check("非全屏作者信息保持原有左对齐", getComputedStyle(document.querySelector("#video-info")).textAlign !== "center");
 
       // The idle timer keeps the chrome up while the video is paused, so simulate playback.
       Object.defineProperty(document.querySelector("#player-card video"), "paused",
@@ -575,8 +581,7 @@
         ![...root.style].some(name => name.startsWith("--tiktok-plus-cinema")));
       check("退出后恢复页面原有尺寸与图标颜色", getComputedStyle(card.querySelector(".DivVideoPlayerContainer")).height === "820px" &&
         getComputedStyle(likePath).fill === "rgb(22, 24, 35)");
-      check("退出全屏恢复字幕原有对齐方式", getComputedStyle(captions).textAlign === originalCaptionAlign);
-      check("退出全屏恢复字幕框原有外边距", getComputedStyle(captions).marginInline === originalCaptionMargin);
+      check("退出全屏后字幕及字幕框继续居中", captionCentered(captions, card));
       check("退出后恢复原行内填色且保留站点新增样式", getComputedStyle(commentSvg).fill === "rgba(22, 24, 35, 0.9)" &&
         commentSvg.style.getPropertyPriority("fill") === "" && commentSvg.style.marginLeft === "2px");
       check("重建工具栏退出后也不残留改色", !document.querySelector('[class*="tiktok-plus-cinema-ink-"]') &&

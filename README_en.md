@@ -44,6 +44,7 @@ Add keyboard shortcuts, individual comment translation, and continuous bulk tran
 ## Notes
 
 - The script matches `https://www.tiktok.com/*` only.
+- Captions are horizontally centered in both normal playback and cinema fullscreen, keeping the site's caption width limit.
 - Most shortcuts are disabled while an editable field is focused to avoid interfering with typing. `Esc`, `Shift + F`, and `Shift + ?` still work.
 - Interaction shortcuts rely on controls available on the current TikTok page. A TikTok UI update may require adapting individual shortcuts.
 

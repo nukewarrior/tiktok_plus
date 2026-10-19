@@ -2,7 +2,7 @@
 // @name         TikTok Plus
 // @name:zh-CN   TikTok Plus
 // @namespace    https://github.com/nukewarrior/tiktok_plus
-// @version      1.5.6
+// @version      1.5.7
 // @description  Keyboard shortcuts, individual and continuous comment translation for TikTok.
 // @description:zh-CN  为 TikTok 添加键盘快捷键、评论逐条翻译和翻译全部。
 // @author       nukewarrior
@@ -18,7 +18,7 @@
 (function () {
   "use strict";
 
-  const SCRIPT_VERSION = "1.5.6";
+  const SCRIPT_VERSION = "1.5.7";
   const SEEK_SECONDS = 5;
   const COMMENT_SELECTOR = '[data-e2e="comment-level-1"], [data-e2e="comment-level-2"]';
   const INTERACTIVE_SELECTOR = 'button, a, [role="button"], [tabindex]';
@@ -393,17 +393,17 @@
       object-fit: contain !important;
     }
 
-    html.tiktok-plus-cinema-mode .tiktok-plus-cinema-card [class*="DivCaptionContainer"] {
+    [class*="DivCaptionContainer"] {
       width: 100% !important;
     }
 
     /* TikTok caps the caption box at 350px; center the box as well as its text. */
-    html.tiktok-plus-cinema-mode .tiktok-plus-cinema-card [class*="DivVideoClosedCaption"] {
+    [class*="DivVideoClosedCaption"] {
       margin-inline: auto !important;
     }
 
-    html.tiktok-plus-cinema-mode .tiktok-plus-cinema-card [class*="DivCaptionContainer"],
-    html.tiktok-plus-cinema-mode .tiktok-plus-cinema-card [class*="DivVideoClosedCaption"] {
+    [class*="DivCaptionContainer"],
+    [class*="DivVideoClosedCaption"] {
       text-align: center !important;
     }
 
