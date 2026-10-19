@@ -2,7 +2,7 @@
 // @name         TikTok Plus
 // @name:zh-CN   TikTok Plus
 // @namespace    https://github.com/nukewarrior/tiktok_plus
-// @version      1.5.0
+// @version      1.5.1
 // @description  Keyboard shortcuts, individual and continuous comment translation for TikTok.
 // @description:zh-CN  为 TikTok 添加键盘快捷键、评论逐条翻译和翻译全部。
 // @author       nukewarrior
@@ -18,7 +18,7 @@
 (function () {
   "use strict";
 
-  const SCRIPT_VERSION = "1.5.0";
+  const SCRIPT_VERSION = "1.5.1";
   const SEEK_SECONDS = 5;
   const COMMENT_SELECTOR = '[data-e2e="comment-level-1"], [data-e2e="comment-level-2"]';
   const INTERACTIVE_SELECTOR = 'button, a, [role="button"], [tabindex]';
@@ -32,9 +32,10 @@
   const CINEMA_CARD_CLASS = "tiktok-plus-cinema-card";
   const CINEMA_BAR_CLASS = "tiktok-plus-cinema-bar";
   const CINEMA_CHROME_CLASS = "tiktok-plus-cinema-chrome";
-  const CINEMA_BACKDROP_CLASS = "tiktok-plus-cinema-backdrop";
   const CINEMA_ARTICLE_CLASS = "tiktok-plus-cinema-article";
   const CINEMA_FLEX_CLASS = "tiktok-plus-cinema-flex";
+  const CINEMA_LIST_CLASS = "tiktok-plus-cinema-list";
+  const CINEMA_MEDIA_CLASS = "tiktok-plus-cinema-media";
   const CINEMA_MEDIA_SELECTOR = '[data-e2e="feed-video"]';
   const CINEMA_ACTION_BAR_SELECTOR = '[class*="SectionActionBarContainer"]';
   const CINEMA_ACTION_BAR_FALLBACK_SELECTOR = '[data-e2e="like-icon"], [data-e2e="comment-icon"]';
@@ -51,7 +52,8 @@
     bar: null,
     article: null,
     flex: null,
-    backdrop: null,
+    video: null,
+    list: null,
     idleTimer: null,
     resizeObserver: null,
     mutationObserver: null,
@@ -197,15 +199,9 @@
 
     html.tiktok-plus-cinema-mode body {
       background: #000 !important;
-    }
-
-    /* Sits above the page shell so stray 1px borders and surface seams between TikTok's nested
-       layout containers are covered, but below the cinema layer. */
-    .tiktok-plus-cinema-backdrop {
-      position: fixed;
-      inset: 0;
-      z-index: 0;
-      background: #000;
+      margin: 0 !important;
+      padding: 0 !important;
+      max-width: none !important;
     }
 
     /* TikTok keeps several side-nav variants (loaded, placeholder, and loading skeleton), and the
@@ -260,10 +256,9 @@
       background: #000 !important;
     }
 
-    /* The chosen video's article and flex row become full-viewport and centre the card. Sibling
-       cards are left in flow: hiding them would zero out their rects, and getCurrentVideo() needs
-       a measurable rect on the very frame cinema mode is applied. */
-    html.tiktok-plus-cinema-mode [class*="DivColumnListContainer"] {
+    /* Every feed item keeps the same viewport-sized slot, so changing the active card cannot
+       shift later items or leave the feed snapped between two videos. */
+    html.tiktok-plus-cinema-mode .tiktok-plus-cinema-list {
       position: relative !important;
       z-index: 1 !important;
       flex: 1 1 auto !important;
@@ -271,18 +266,27 @@
       min-width: 0 !important;
       max-width: none !important;
       height: 100vh !important;
+      min-height: 0 !important;
+      max-height: 100vh !important;
+      margin: 0 !important;
       padding: 0 !important;
+      overflow-y: auto !important;
+      overflow-x: hidden !important;
+      scroll-snap-type: y mandatory !important;
+      scroll-padding: 0 !important;
+      scroll-behavior: auto !important;
       background: transparent !important;
       /* Scrolling must stay available for ↑/↓ navigation, but the scrollbar gutter would draw
          a vertical line at the list edge, so hide the scrollbar itself. */
       scrollbar-width: none !important;
     }
 
-    html.tiktok-plus-cinema-mode [class*="DivColumnListContainer"]::-webkit-scrollbar {
+    html.tiktok-plus-cinema-mode .tiktok-plus-cinema-list::-webkit-scrollbar {
       width: 0 !important;
       height: 0 !important;
     }
 
+    html.tiktok-plus-cinema-mode .tiktok-plus-cinema-list article,
     html.tiktok-plus-cinema-mode .tiktok-plus-cinema-article {
       position: relative !important;
       z-index: 1 !important;
@@ -292,9 +296,16 @@
       width: 100% !important;
       max-width: 100% !important;
       height: 100vh !important;
+      min-height: 100vh !important;
+      max-height: 100vh !important;
+      flex: 0 0 auto !important;
       margin: 0 !important;
       padding: 0 16px !important;
       box-sizing: border-box !important;
+      scroll-snap-align: start !important;
+      scroll-snap-stop: always !important;
+      scroll-margin: 0 !important;
+      overflow: hidden !important;
     }
 
     html.tiktok-plus-cinema-mode .tiktok-plus-cinema-flex {
@@ -320,6 +331,8 @@
       height: var(--tiktok-plus-cinema-height) !important;
       max-width: none !important;
       max-height: none !important;
+      min-width: 0 !important;
+      min-height: 0 !important;
       margin: 0 !important;
       border-radius: 0 !important;
       background: #000 !important;
@@ -329,6 +342,33 @@
     html.tiktok-plus-cinema-mode .tiktok-plus-cinema-bar {
       position: relative !important;
       z-index: 2 !important;
+      --ui-text-1: #fff;
+      --ui-text-2: rgba(255, 255, 255, 0.9);
+      --ui-text-3: rgba(255, 255, 255, 0.7);
+      color: #fff !important;
+    }
+
+    /* Replace only the light-theme ink; liked/favorited icons keep their red/yellow fills. */
+    html.tiktok-plus-cinema-mode .tiktok-plus-cinema-bar [fill="#161823"] {
+      fill: #fff !important;
+    }
+
+    /* Player wrappers can retain pixel sizes or transforms from the normal feed layout. */
+    html.tiktok-plus-cinema-mode .tiktok-plus-cinema-media,
+    html.tiktok-plus-cinema-mode .tiktok-plus-cinema-card video {
+      position: absolute !important;
+      inset: 0 !important;
+      width: 100% !important;
+      height: 100% !important;
+      min-width: 0 !important;
+      min-height: 0 !important;
+      max-width: none !important;
+      max-height: none !important;
+      margin: 0 !important;
+      padding: 0 !important;
+      transform: none !important;
+      border-radius: 0 !important;
+      aspect-ratio: auto !important;
     }
 
     /* TikTok paints frames on a super-resolution canvas layer and hides the <video> element.
@@ -1414,6 +1454,7 @@
   }
 
   function navigateVideo(direction) {
+    if (isCinemaActive()) return scrollFeed(direction);
     const clicked = direction > 0
       ? clickByPatterns([/next/i, /下一个|下一条|下滑|下个/], ['[data-e2e*="arrow"], [aria-label*="Next"]'])
       : clickByPatterns([/previous|prev/i, /上一个|上一条|上滑|上个/], ['[data-e2e*="arrow"], [aria-label*="Previous"]']);
@@ -1432,7 +1473,12 @@
   // element. Anchor the card and its bar onto black instead of fullscreening the card alone.
   function getCinemaCard(video = getCurrentVideo()) {
     if (!video) return null;
-    return video.closest(CINEMA_MEDIA_SELECTOR) || getVideoRoot(video) || video;
+    // Some player variants put the feed-video hook on an inner node or the video itself.
+    for (let card = video; card && card.tagName !== "ARTICLE"; card = card.parentElement) {
+      if (findCinemaActionBar(card)) return card;
+    }
+    const card = video.closest(CINEMA_MEDIA_SELECTOR) || getVideoRoot(video);
+    return card && card !== video ? card : video.parentElement;
   }
 
   function findCinemaActionBar(card) {
@@ -1456,10 +1502,17 @@
       .forEach((name) => document.documentElement.style.removeProperty(`--tiktok-plus-cinema-${name}`));
   }
 
-  // The rail is hidden by our own rules while comments are closed, so its width reads 0 and
-  // cannot be used to detect an open panel. Detect by node presence, then reveal and measure.
+  // Probe without our rail-hiding rule; a mounted comment list can also be hidden by TikTok.
   function cinemaCommentsOpen() {
-    return Boolean(document.querySelector(CINEMA_COMMENT_PANEL_SELECTOR));
+    const panel = document.querySelector(CINEMA_COMMENT_PANEL_SELECTOR);
+    if (!panel) return false;
+    document.documentElement.classList.add(CINEMA_COMMENTS_CLASS);
+    for (let element = panel; element && element !== document.documentElement; element = element.parentElement) {
+      const style = getComputedStyle(element);
+      if (element.hidden || element.getAttribute("aria-hidden") === "true" ||
+          style.display === "none" || style.visibility === "hidden") return false;
+    }
+    return true;
   }
 
   function cinemaRailWidth(open) {
@@ -1570,21 +1623,26 @@
     document.documentElement.classList.add(CINEMA_IDLE_CLASS);
   }
 
-  function paintCinema() {
-    const card = getCinemaCard();
+  function paintCinema(card = getCinemaCard()) {
     if (!card) return true;
     if (!isCinemaActive()) return true;
 
-    if (card !== cinemaState.card) {
+    const bar = findCinemaActionBar(card);
+    const video = card.querySelector("video");
+    if (card !== cinemaState.card || bar !== cinemaState.bar || video !== cinemaState.video) {
       teardownCinemaCard();
       cinemaState.card = card;
-      cinemaState.bar = findCinemaActionBar(card);
+      cinemaState.bar = bar;
+      cinemaState.video = video;
       cinemaState.flex = card.parentElement;
       cinemaState.article = card.closest("article") || cinemaState.flex;
       card.classList.add(CINEMA_CARD_CLASS);
       if (cinemaState.bar) cinemaState.bar.classList.add(CINEMA_BAR_CLASS);
       if (cinemaState.flex) cinemaState.flex.classList.add(CINEMA_FLEX_CLASS);
       if (cinemaState.article) cinemaState.article.classList.add(CINEMA_ARTICLE_CLASS);
+      for (let element = video && video.parentElement; element && element !== card; element = element.parentElement) {
+        element.classList.add(CINEMA_MEDIA_CLASS);
+      }
       markCinemaChrome();
       watchCinemaCard(card);
     }
@@ -1608,12 +1666,21 @@
       `.${CINEMA_CHROME_CLASS}`,
       `.${CINEMA_FLEX_CLASS}`,
       `.${CINEMA_ARTICLE_CLASS}`,
+      `.${CINEMA_MEDIA_CLASS}`,
     ].join(", ")).forEach((element) => element.classList.remove(
-      CINEMA_CARD_CLASS, CINEMA_BAR_CLASS, CINEMA_CHROME_CLASS, CINEMA_FLEX_CLASS, CINEMA_ARTICLE_CLASS));
+      CINEMA_CARD_CLASS, CINEMA_BAR_CLASS, CINEMA_CHROME_CLASS, CINEMA_FLEX_CLASS, CINEMA_ARTICLE_CLASS, CINEMA_MEDIA_CLASS));
     cinemaState.card = null;
     cinemaState.bar = null;
     cinemaState.flex = null;
     cinemaState.article = null;
+    cinemaState.video = null;
+  }
+
+  function alignCinemaCard() {
+    const { list, article } = cinemaState;
+    if (list && article) {
+      list.scrollTop += article.getBoundingClientRect().top - list.getBoundingClientRect().top;
+    }
   }
 
   function watchCinemaCard(card) {
@@ -1637,24 +1704,21 @@
     const card = getCinemaCard();
     if (!card) return false;
 
-    if (!cinemaState.backdrop) {
-      const backdrop = document.createElement("div");
-      backdrop.className = CINEMA_BACKDROP_CLASS;
-      document.documentElement.appendChild(backdrop);
-      cinemaState.backdrop = backdrop;
-    }
-
+    cinemaState.list = card.closest('[class*="DivColumnListContainer"]') ||
+      getScrollContainers(card).find((element) => element !== document.scrollingElement &&
+        element !== document.documentElement && element !== document.body) || null;
+    if (cinemaState.list) cinemaState.list.classList.add(CINEMA_LIST_CLASS);
     document.documentElement.classList.add(CINEMA_CLASS);
-    paintCinema();
+    paintCinema(card);
+    alignCinemaCard();
 
-    const onScroll = () => requestAnimationFrame(paintCinema);
-    const onResize = () => layoutCinema();
+    const onScroll = () => requestAnimationFrame(() => paintCinema());
+    const onResize = () => { layoutCinema(); alignCinemaCard(); };
     cinemaState.listeners = [
       ["scroll", onScroll, true],
       ["resize", onResize, false],
       ["pointermove", revealCinemaChrome, true],
       ["pointerdown", revealCinemaChrome, true],
-      ["keydown", revealCinemaChrome, true],
       ["wheel", revealCinemaChrome, true],
       ["touchstart", revealCinemaChrome, true],
     ];
@@ -1665,7 +1729,7 @@
     if (typeof MutationObserver === "function") {
       // The comment rail mounts and unmounts as new nodes, but a theme or layout toggle can also
       // merely hide it, so watch attributes as well to keep the centering correct.
-      cinemaState.mutationObserver = new MutationObserver(() => requestAnimationFrame(layoutCinema));
+      cinemaState.mutationObserver = new MutationObserver(() => requestAnimationFrame(() => paintCinema()));
       cinemaState.mutationObserver.observe(document.body, {
         childList: true,
         subtree: true,
@@ -1679,6 +1743,7 @@
   }
 
   function exitCinema() {
+    const { list, article } = cinemaState;
     clearTimeout(cinemaState.idleTimer);
     cinemaState.idleTimer = null;
 
@@ -1698,12 +1763,13 @@
     }
 
     teardownCinemaCard();
+    if (cinemaState.list) cinemaState.list.classList.remove(CINEMA_LIST_CLASS);
+    cinemaState.list = null;
     document.documentElement.classList.remove(CINEMA_CLASS, CINEMA_IDLE_CLASS, CINEMA_COMMENTS_CLASS);
     clearCinemaVariables();
 
-    if (cinemaState.backdrop) {
-      cinemaState.backdrop.remove();
-      cinemaState.backdrop = null;
+    if (list && article && article.isConnected) {
+      list.scrollTop += article.getBoundingClientRect().top - list.getBoundingClientRect().top;
     }
   }
 
@@ -1956,6 +2022,7 @@
   }
 
   function onKeyDown(event) {
+    revealCinemaChrome();
     const key = event.key.toLowerCase();
     const code = event.code;
     const editable = isEditableTarget(event.target);

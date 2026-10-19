@@ -7,7 +7,7 @@
   body { max-width: 900px; margin: 32px auto; padding: 0 20px; font: 15px/1.6 system-ui; }
   article { padding: 12px; margin: 8px 0; border: 1px solid GrayText; }
   #results { white-space: pre-wrap; }
-  video { position: fixed; top: 12px; right: 12px; width: 200px; height: 80px; }
+  video { width: 100%; height: 100%; object-fit: cover; }
   #fullscreen { position: fixed; top: 132px; right: 12px; }
   #next-video { position: fixed; top: 164px; right: 12px; }
   #previous-video { position: fixed; top: 196px; right: 12px; }
@@ -17,7 +17,13 @@
   #right-panel { flex: 0 0 320px; width: 320px; height: 100%; background: Canvas; }
   #right-panel[hidden] { display: none; }
   #column-list-container { flex: 1 1 auto; min-width: 0; height: 100%; overflow: auto; }
-  #video-article { height: 100%; }
+  #column-list-container article { height: max(900px, calc(100vh - 100px)); min-height: max(900px, calc(100vh - 100px)); }
+  [data-e2e="feed-video"] { position: relative; width: 400px; height: 820px; border-radius: 16px; overflow: hidden; }
+  .DivVideoPlayerContainer { position: relative; width: 400px; height: 820px; }
+  .DivMediaCardOverlayTop { position: absolute; top: 8px; right: 8px; z-index: 3; }
+  .DivMediaCardOverlayBottom { position: absolute; bottom: 8px; left: 8px; z-index: 3; }
+  .SectionActionBarContainer { color: var(--ui-text-1); }
+  .SectionActionBarContainer svg { width: 24px; height: 24px; }
   #media-card-row { display: flex; gap: 16px; height: 100%; justify-content: center; align-items: center; }
   #bulk-panel { position: fixed; top: 250px; right: 12px; width: 420px; max-height: 480px; overflow: auto; background: Canvas; border: 1px solid GrayText; }
   #bulk-panel [class="DivCommentHeader"] { display: flex; align-items: center; padding: 8px; }
@@ -36,18 +42,18 @@
      article whose flex row holds the media card and the action bar as siblings, and the
      more-menu popover is portalled outside all of it. -->
 <div id="content">
-<div id="column-list-container">
+<div id="column-list-container" class="DivColumnListContainer">
   <article class="ArticleItemContainer" id="video-article">
     <div id="media-card-row" class="DivContentFlexLayout">
       <section id="player-card" data-e2e="feed-video" aria-label="Watch in full screen">
-        <video></video>
+        <div class="DivVideoPlayerContainer"><video></video></div>
         <div class="DivMediaCardOverlayTop">
           <button data-e2e="more-menu-icon" id="more-menu" aria-haspopup="dialog">⋯</button>
         </div>
         <div class="DivMediaCardOverlayBottom" id="video-info">作者信息</div>
       </section>
       <section class="SectionActionBarContainer" id="action-bar">
-        <div role="button" tabindex="0" data-e2e="like-icon" id="like-icon" aria-pressed="false">❤</div>
+        <div role="button" tabindex="0" data-e2e="like-icon" id="like-icon" aria-pressed="false"><svg viewBox="0 0 24 24"><path fill="#161823" d="M2 2h20v20H2z"/></svg></div>
         <div role="button" tabindex="0" data-e2e="comment-icon" id="comment-icon">💬</div>
         <div role="button" tabindex="0" data-e2e="favorite-icon" id="favorite-icon">🔖</div>
       </section>
@@ -151,7 +157,7 @@
   };
   window.__fullscreenCalls = fullscreenCalls;
 </script>
-<script src="../tiktok_plus.js?v=1.5.0"></script>
+<script src="../tiktok_plus.js?v=1.5.1"></script>
 <script>
   (async () => {
     const output = document.querySelector("#results");
@@ -282,6 +288,30 @@
       Object.defineProperty(document.querySelector("#player-card video"), "videoHeight",
         { configurable: true, get: () => 1920 });
 
+      const feed = document.querySelector("#column-list-container");
+      const article = document.querySelector("#video-article");
+      const makeFeedItem = (width, height) => {
+        const item = article.cloneNode(true);
+        item.removeAttribute("id");
+        item.querySelectorAll("[id]").forEach(node => node.removeAttribute("id"));
+        // A different player variant puts the hook on the video, not the outer card.
+        item.querySelector('[data-e2e="feed-video"]').removeAttribute("data-e2e");
+        const video = item.querySelector("video");
+        video.setAttribute("data-e2e", "feed-video");
+        Object.defineProperties(video, {
+          videoWidth: { configurable: true, get: () => width },
+          videoHeight: { configurable: true, get: () => height },
+          paused: { configurable: true, get: () => false },
+        });
+        return item;
+      };
+      const previous = makeFeedItem(1080, 1920);
+      const next = makeFeedItem(1920, 1080);
+      feed.prepend(previous);
+      feed.append(next);
+      feed.scrollTop += article.getBoundingClientRect().top - feed.getBoundingClientRect().top;
+      await frames();
+
       key(document.body, "KeyF", "f");
       await flush();
       check("F 让整个文档进入全屏而非单个播放器卡片", calls.length === 1 && calls[0] === root &&
@@ -307,6 +337,29 @@
         const gapOk = barRect.left >= cardRect.right;
         return ratioOk && gapOk && cardRect.width > 1 && cardRect.height > 1;
       })());
+      check("视频与内层播放器完整落在视口内", (() => {
+        const videoRect = card.querySelector("video").getBoundingClientRect();
+        const cardRect = card.getBoundingClientRect();
+        return videoRect.top >= 0 && videoRect.bottom <= innerHeight &&
+          Math.abs(videoRect.width - cardRect.width) <= 1 &&
+          Math.abs(videoRect.height - cardRect.height) <= 1 &&
+          getComputedStyle(card.querySelector("video")).objectFit === "contain";
+      })());
+      check("从信息流中间进入时各视频占一屏且当前条目对齐", [previous, article, next].every(item =>
+        Math.abs(item.getBoundingClientRect().height - innerHeight) <= 1) &&
+        Math.abs(article.getBoundingClientRect().top) <= 1 &&
+        previous.getBoundingClientRect().bottom <= 1 && next.getBoundingClientRect().top >= innerHeight - 1);
+      check("黑底工具栏文字与默认图标保持高对比度", getComputedStyle(bar).color === "rgb(255, 255, 255)" &&
+        getComputedStyle(bar.querySelector("path")).fill === "rgb(255, 255, 255)");
+      const likePath = bar.querySelector("path");
+      likePath.setAttribute("fill", "#fe2c55");
+      check("影院样式不覆盖已点赞的红色图标", getComputedStyle(likePath).fill === "rgb(254, 44, 85)");
+      likePath.setAttribute("fill", "#161823");
+      check("菜单按钮与工具栏可被鼠标实际命中", [document.querySelector("#more-menu"), bar.querySelector('[data-e2e="like-icon"]')].every(element => {
+        const rect = element.getBoundingClientRect();
+        const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+        return hit === element || element.contains(hit);
+      }));
 
       // The portalled popover is the regression this change exists for: it lived outside the
       // card's fullscreen subtree, so it rendered nowhere and swallowed clicks.
@@ -337,6 +390,8 @@
       check("闲置后自动隐藏信息浮层与工具栏", idleReached &&
         Number(getComputedStyle(document.querySelector("#video-info")).opacity) === 0 &&
         Number(getComputedStyle(bar).opacity) === 0);
+      key(document.body, "ArrowRight", "ArrowRight");
+      check("快进快捷键也会恢复控件", !root.classList.contains("tiktok-plus-cinema-mode-idle"));
       reveal();
       await frames(2);
       check("鼠标活动后立即恢复显示", !root.classList.contains("tiktok-plus-cinema-mode-idle"));
@@ -358,8 +413,44 @@
         const cardRect = card.getBoundingClientRect();
         const barRect = bar.getBoundingClientRect();
         const groupCenter = (cardRect.left + barRect.right) / 2;
-        return Math.abs(groupCenter - window.innerWidth / 2) <= 2;
+        return !root.classList.contains("tiktok-plus-cinema-mode-comments") &&
+          Math.abs(groupCenter - window.innerWidth / 2) <= 2;
       })());
+
+      document.querySelector("#next-video").hidden = true;
+      document.querySelector("#previous-video").hidden = true;
+      key(document.body, "ArrowDown", "ArrowDown");
+      await until(() => Math.abs(next.getBoundingClientRect().top) <= 1 &&
+        !!next.querySelector(".tiktok-plus-cinema-card"));
+      check("向下切视频后只显示目标条目", article.getBoundingClientRect().bottom <= 1 &&
+        Math.abs(next.getBoundingClientRect().height - innerHeight) <= 1);
+      check("横屏视频及内层播放器完整显示且比例正确", (() => {
+        const rect = next.querySelector("video").getBoundingClientRect();
+        return rect.top >= 0 && rect.bottom <= innerHeight &&
+          rect.left >= 0 && rect.right <= innerWidth && Math.abs(rect.width / rect.height - 16 / 9) < 0.02;
+      })());
+      key(document.body, "ArrowUp", "ArrowUp");
+      await until(() => Math.abs(article.getBoundingClientRect().top) <= 1 &&
+        card.classList.contains("tiktok-plus-cinema-card"));
+      check("向上切回后仍按整屏对齐", next.getBoundingClientRect().top >= innerHeight - 1);
+
+      feed.scrollBy({ top: innerHeight * 0.7, behavior: "smooth" });
+      await until(() => Math.abs(next.getBoundingClientRect().top) <= 1 &&
+        !!next.querySelector(".tiktok-plus-cinema-card"));
+      check("滚动结束后吸附到一条完整视频", article.getBoundingClientRect().bottom <= 1);
+      const rebuiltItem = makeFeedItem(1920, 1080);
+      next.replaceWith(rebuiltItem);
+      await until(() => !!rebuiltItem.querySelector(".tiktok-plus-cinema-card"));
+      check("当前播放器 DOM 重建后重新绑定影院布局", !!rebuiltItem.querySelector(".tiktok-plus-cinema-bar") &&
+        rebuiltItem.querySelector("video").getBoundingClientRect().bottom <= innerHeight);
+      const oldBar = rebuiltItem.querySelector(".SectionActionBarContainer");
+      const newBar = oldBar.cloneNode(true);
+      newBar.classList.remove("tiktok-plus-cinema-bar", "tiktok-plus-cinema-chrome");
+      oldBar.replaceWith(newBar);
+      await until(() => newBar.classList.contains("tiktok-plus-cinema-bar"));
+      check("仅替换工具栏时也重新绑定", newBar.classList.contains("tiktok-plus-cinema-chrome"));
+      document.querySelector("#next-video").hidden = false;
+      document.querySelector("#previous-video").hidden = false;
 
       key(document.body, "KeyH", "h");
       await flush();
@@ -369,7 +460,16 @@
         !document.querySelector("#video-article").className.includes("tiktok-plus-cinema") &&
         !document.querySelector("#media-card-row").className.includes("tiktok-plus-cinema") &&
         !document.querySelector(".tiktok-plus-cinema-backdrop") &&
+        !document.querySelector(".tiktok-plus-cinema-media, .tiktok-plus-cinema-list") &&
         ![...root.style].some(name => name.startsWith("--tiktok-plus-cinema")));
+      check("退出后恢复页面原有尺寸与图标颜色", getComputedStyle(card.querySelector(".DivVideoPlayerContainer")).height === "820px" &&
+        getComputedStyle(likePath).fill === "rgb(22, 24, 35)");
+      check("退出后仍停留在当前视频", (() => {
+        // At the end of the feed scrollTop can clamp before the article reaches the top.
+        const rect = rebuiltItem.querySelector("video").getBoundingClientRect();
+        const visibleHeight = Math.min(rect.bottom, innerHeight) - Math.max(rect.top, 0);
+        return visibleHeight >= Math.min(rect.height, innerHeight) * 0.9;
+      })());
 
       window.__denyFullscreen = true;
       key(document.body, "KeyF", "f");
