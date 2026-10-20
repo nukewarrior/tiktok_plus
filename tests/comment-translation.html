@@ -34,7 +34,7 @@
   #bulk-panel [class="DivCommentHeader"] { display: flex; align-items: center; padding: 8px; }
 </style>
 <h1>TikTok Plus 评论翻译测试</h1>
-<p>自动检查，使用模拟请求，不连接 Google。刷新可重新运行。</p>
+<p>自动检查，使用模拟请求，不连接 Google 或 AI 服务。刷新可重新运行。</p>
 <pre id="results" role="status">运行中…</pre>
 <div id="comments">
   <article id="initial"><div data-e2e="comment-username-1"><a href="/@example">Example</a></div><span data-e2e="comment-level-1">Hello <a href="/@friend">@friend</a> 😭</span><img alt="照片"><div><button data-e2e="comment-reply-1">回复</button></div></article>
@@ -94,6 +94,7 @@
     [[seedKey, { text: "已有缓存译文", expires: Date.now() + 86400000 }]]);
   window.GM_getValue = (key, fallback) => storage.get(key) ?? fallback;
   window.GM_setValue = (key, value) => storage.set(key, value);
+  window.GM_registerMenuCommand = (name, callback) => { window.__translationSettingsMenu = callback; };
   // Privileged userscripts expose a wrapped window that cannot be used as UIEvent.view.
   const NativeMouseEvent = MouseEvent;
   window.MouseEvent = class extends NativeMouseEvent {
@@ -171,7 +172,7 @@
   };
   window.__fullscreenCalls = fullscreenCalls;
 </script>
-<script src="../tiktok_plus.js?v=1.5.7"></script>
+<script src="../tiktok_plus.js?v=1.6.0"></script>
 <script>
   (async () => {
     const output = document.querySelector("#results");
@@ -703,6 +704,290 @@
       check("持久化缓存写入用户脚本存储", storage.get("tiktok-plus:dict-chrome-ex:v1")
         .some(item => item[1]?.text === "你好 @friend 😭"));
       check("翻译按钮不会吞掉原生 Space 按键", !key(initialButton, "Space", " ").defaultPrevented);
+      // Start the AI scenarios in a fresh quota window without waiting a real minute.
+      const realNow = Date.now;
+      Date.now = () => realNow() + 60001;
+      const settingsKey = "tiktok-plus:translation-settings:v1";
+      const openSettings = () => {
+        window.__translationSettingsMenu();
+        return document.querySelector(".tiktok-plus-settings");
+      };
+      const field = (dialog, name) => dialog.querySelector(`[name="${name}"]`);
+      const setField = (dialog, name, value) => {
+        field(dialog, name).value = value;
+        field(dialog, name).dispatchEvent(new Event(name === "baseUrl" || name === "apiKey" ? "input" : "change", { bubbles: true }));
+      };
+      const jsonResponse = (request, data, status = 200) => request.onload({ status, responseHeaders: "", responseText: JSON.stringify(data) });
+      const modelResponse = request => jsonResponse(request, { data: [{ id: "local-model" }, { id: "other-model" }, { id: "local-model" }, null] });
+      const aiResponse = (request, text) => {
+        const responses = new URL(request.url).pathname.endsWith("/responses");
+        jsonResponse(request, responses ? { status: "completed", output: [
+          { type: "reasoning", summary: [{ text: "不应显示的推理" }] },
+          { type: "message", role: "assistant", status: "completed", content: [
+            { type: "output_text", text }, { type: "output_text", text: "！" },
+          ] },
+        ] } : { choices: [{ finish_reason: "stop", message: { content: text } }] });
+      };
+      const configure = async (changes = {}) => {
+        const dialog = openSettings();
+        for (const [name, value] of Object.entries(changes)) if (name !== "model") setField(dialog, name, value);
+        if (changes.model && ![...field(dialog, "model").options].some(option => option.value === changes.model)) {
+          dialog.querySelector('[data-action="models"]').click();
+          modelResponse(requests.at(-1));
+          await flush();
+        }
+        if (changes.model) setField(dialog, "model", changes.model);
+        dialog.querySelector("form").requestSubmit();
+        await until(() => !document.querySelector(".tiktok-plus-settings"));
+        await flush();
+      };
+      const aiComment = async text => {
+        const comment = makeComment(text);
+        await flush();
+        buttonFor(comment).click();
+        await flush();
+        return comment;
+      };
+
+      const beforeSettings = requests.length;
+      let dialog = openSettings();
+      check("脚本菜单能打开设置，默认 Google 且打开不联网", field(dialog, "provider").value === "google" && requests.length === beforeSettings);
+      check("设置弹窗为原生模态框并接收焦点", dialog.matches(":modal") && dialog.contains(document.activeElement));
+      setField(dialog, "provider", "ai");
+      check("AI 默认本地地址、Chat 接口、服务默认思考等级", field(dialog, "baseUrl").value === "http://127.0.0.1:3425/v1" && field(dialog, "api").value === "chat" && field(dialog, "effort").value === "");
+      const effortOptions = [...field(dialog, "effort").options].map(option => option.value);
+      check("提供全部思考等级并区分默认和 none", effortOptions.join(",") === ",none,minimal,low,medium,high,xhigh,max");
+      const cancelledKey = key(field(dialog, "baseUrl"), "KeyF", "f");
+      check("设置打开时快捷键不触发全屏", !cancelledKey.defaultPrevented && !document.fullscreenElement);
+      const invalidModelsStart = requests.length;
+      setField(dialog, "baseUrl", "file:///tmp/models");
+      dialog.querySelector('[data-action="models"]').click();
+      check("拒绝非 HTTP 地址且不发送请求", requests.length === invalidModelsStart && dialog.querySelector('[role="status"]').textContent.includes("HTTP"));
+      setField(dialog, "baseUrl", "http://127.0.0.1:3425/v1/");
+      setField(dialog, "apiKey", "test-only-key");
+      dialog.querySelector('[data-action="models"]').click();
+      const staleModels = requests.at(-1);
+      check("模型读取使用匿名 GET 和可选认证", staleModels.method === "GET" && staleModels.url === "http://127.0.0.1:3425/v1/models" && staleModels.anonymous && staleModels.headers.Authorization === "Bearer test-only-key");
+      setField(dialog, "baseUrl", "http://127.0.0.1:3425/v1");
+      modelResponse(staleModels);
+      await flush();
+      check("修改地址清空 Key 且忽略旧模型列表", staleModels.aborted && !field(dialog, "apiKey").value && field(dialog, "model").options.length === 1);
+      dialog.querySelector('[data-action="models"]').click();
+      jsonResponse(requests.at(-1), { data: [] });
+      await flush();
+      check("空模型列表显示明确状态", dialog.querySelector('[role="status"]').textContent.includes("未返回"));
+      dialog.querySelector('[data-action="models"]').click();
+      jsonResponse(requests.at(-1), { error: "private server diagnostic" }, 401);
+      await flush();
+      check("模型认证失败显示脱敏提示", dialog.querySelector('[role="status"]').textContent.includes("401") && !dialog.textContent.includes("private server diagnostic"));
+      setField(dialog, "apiKey", "test-only-key");
+      dialog.querySelector('[data-action="models"]').click();
+      modelResponse(requests.at(-1));
+      await flush();
+      check("模型列表去重并可选择", field(dialog, "model").options.length === 3);
+      setField(dialog, "model", "local-model");
+      dialog.querySelector("form").requestSubmit();
+      await until(() => !document.querySelector(".tiktok-plus-settings"));
+      check("保存规范化地址和模型配置", storage.get(settingsKey).baseUrl === "http://127.0.0.1:3425/v1" && storage.get(settingsKey).model === "local-model" && storage.get(settingsKey).apiKey === "test-only-key");
+      dialog = openSettings();
+      check("重开设置保留选择但不把已存 Key 回填页面", field(dialog, "model").value === "local-model" && field(dialog, "apiKey").value === "" && !dialog.innerHTML.includes("test-only-key"));
+      dialog.querySelector('[data-action="cancel"]').click();
+      await until(() => !document.querySelector(".tiktok-plus-settings"));
+
+      for (const api of ["chat", "responses"]) for (const effort of effortOptions) {
+        await configure({ api, effort });
+        const start = requests.length;
+        const comment = await aiComment("Same comment across settings 😭 @friend");
+        check(`${api}/${effort || "默认"} 使用独立缓存发起请求`, requests.length === start + 1);
+        const request = requests.at(-1), body = JSON.parse(request.data);
+        check(`${api}/${effort || "默认"} 思考参数映射正确`, effort
+          ? api === "chat" ? body.reasoning_effort === effort && !("reasoning" in body) : body.reasoning?.effort === effort && !("reasoning_effort" in body)
+          : !("reasoning" in body) && !("reasoning_effort" in body));
+        check(`${api}/${effort || "默认"} 接口、模型、认证和超时正确`, request.url.endsWith(api === "chat" ? "/chat/completions" : "/responses") && request.method === "POST" && body.model === "local-model" && request.timeout === 120000 && request.anonymous && body.stream === false && request.headers.Authorization === "Bearer test-only-key");
+        if (api === "responses") check("Responses 使用 input、instructions 和 store:false", body.input === comment.textContent && body.instructions.includes("Simplified Chinese") && body.store === false);
+        else check("Chat 使用分离的翻译指令与评论", body.messages[0].role === "system" && body.messages[1].content === comment.textContent);
+        aiResponse(request, `<b>${api}-${effort}</b>`);
+        await flush();
+        check(`${api}/${effort || "默认"} 仅按文本渲染译文`, translated(comment).textContent === `<b>${api}-${effort}</b>` + (api === "responses" ? "！" : "") && translated(comment).children.length === 0);
+      }
+      await configure({ api: "chat", effort: "" });
+      const cacheStart = requests.length;
+      const cachedAI = await aiComment("Same comment across settings 😭 @friend");
+      check("切回同一模型和思考等级可复用缓存", requests.length === cacheStart && !translated(cachedAI).hidden);
+      await configure({ model: "other-model" });
+      const other = await aiComment("Same comment across settings 😭 @friend");
+      check("模型不同不共用缓存", requests.length === cacheStart + 2 && JSON.parse(requests.at(-1).data).model === "other-model");
+      aiResponse(requests.at(-1), "另一模型");
+      await flush();
+      const longAI = await aiComment("Long AI comment ".repeat(100));
+      const longRequest = requests.at(-1);
+      check("AI 长评论完整发送且不按900字符拆分", JSON.parse(longRequest.data).messages[1].content === longAI.textContent.trim());
+      const concurrentStart = requests.length;
+      const concurrentA = await aiComment("AI concurrency second slot");
+      const concurrentB = await aiComment("AI concurrency queued slot");
+      check("AI 最多两个并发，第三条排队", requests.length === concurrentStart + 1 && buttonFor(concurrentB).disabled);
+      aiResponse(longRequest, "长评论译文");
+      await until(() => requests.length === concurrentStart + 2);
+      const queuedRequest = requests.at(-1);
+      aiResponse(requests[concurrentStart], "第二条");
+      aiResponse(queuedRequest, "第三条");
+      await flush();
+      check("AI 排队任务继续执行", !translated(concurrentA).hidden && !translated(concurrentB).hidden);
+
+      const invalid = await aiComment("Unsupported reasoning setting");
+      const invalidRequest = requests.at(-1), invalidStart = requests.length;
+      jsonResponse(invalidRequest, { error: { message: "private error" } }, 400);
+      await wait(1100);
+      check("不支持参数时不自动重试、不降级且保留原文", requests.length === invalidStart && buttonFor(invalid).textContent === "翻译失败，重试" && buttonFor(invalid).title.includes("思考等级") && !invalid.classList.contains("tiktok-plus-original-hidden") && !buttonFor(invalid).title.includes("private error"));
+      buttonFor(invalid).click();
+      await flush();
+      aiResponse(requests.at(-1), "手动重试成功");
+      await flush();
+      check("AI 失败后允许手动重试", !translated(invalid).hidden);
+      const retry = await aiComment("AI temporary failure");
+      const retryStart = requests.length;
+      requests.at(-1).ontimeout();
+      await until(() => requests.length === retryStart + 1, 4);
+      aiResponse(requests.at(-1), "重试译文");
+      await flush();
+      check("AI 临时超时沿用有限重试", !translated(retry).hidden);
+      const malformed = await aiComment("Malformed AI response");
+      const malformedStart = requests.length;
+      requests.at(-1).onload({ status: 200, responseHeaders: "", responseText: "not JSON" });
+      await flush();
+      check("无效 JSON 响应失败且不重试", requests.length === malformedStart && buttonFor(malformed).textContent === "翻译失败，重试");
+      const truncated = await aiComment("Truncated AI response");
+      jsonResponse(requests.at(-1), { choices: [{ finish_reason: "length", message: { content: "截断译文" } }] });
+      await flush();
+      check("不完整译文不展示、不缓存", translated(truncated).hidden && buttonFor(truncated).textContent === "翻译失败，重试");
+
+      const old = await aiComment("Late response after settings change");
+      const oldRequest = requests.at(-1);
+      const oldOther = await aiComment("Other active request before settings change");
+      const otherOldRequest = requests.at(-1);
+      await aiComment("Queued request before settings change");
+      const switchStart = requests.length;
+      await configure({ effort: "high" });
+      check("修改配置取消在途请求并清除待发送队列", oldRequest.aborted && otherOldRequest.aborted && requests.length === switchStart);
+      aiResponse(oldRequest, "不应展示的旧译文");
+      await flush();
+      check("旧配置迟到结果不覆盖页面", translated(old).hidden && buttonFor(old).textContent === "翻译" && translated(oldOther).hidden);
+      buttonFor(old).click();
+      await flush();
+      check("新配置重新请求且携带新思考等级", JSON.parse(requests.at(-1).data).reasoning_effort === "high");
+      aiResponse(requests.at(-1), "新配置译文");
+      await flush();
+      await configure({ effort: "" });
+      const beforeOldRetry = requests.length;
+      buttonFor(old).click();
+      await flush();
+      check("已取消的旧配置结果未进入缓存", requests.length === beforeOldRetry + 1);
+      aiResponse(requests.at(-1), "重新翻译");
+      await flush();
+
+      await configure({ api: "responses" });
+      for (const data of [
+        { status: "incomplete", output: [] },
+        { status: "completed", output: [{ type: "message", role: "assistant", content: [{ type: "refusal", refusal: "拒绝" }] }] },
+        { status: "completed", output: [{ type: "reasoning" }] }, null,
+      ]) {
+        const comment = await aiComment("Invalid Responses output " + JSON.stringify(data));
+        jsonResponse(requests.at(-1), data);
+        await flush();
+        check("Responses 拒绝、不完整、空译文或无效结构不成功", buttonFor(comment).textContent === "翻译失败，重试" && translated(comment).hidden);
+      }
+      dialog = openSettings();
+      dialog.querySelector('[data-action="clear-key"]').click();
+      dialog.querySelector('[data-action="models"]').click();
+      check("清除 Key 后模型请求不携带 Authorization", !requests.at(-1).headers.Authorization);
+      modelResponse(requests.at(-1));
+      await flush();
+      setField(dialog, "model", "local-model");
+      dialog.querySelector("form").requestSubmit();
+      await until(() => !document.querySelector(".tiktok-plus-settings"));
+      check("清除 API Key 可以持久化", storage.get(settingsKey).apiKey === "");
+      const noKey = await aiComment("Anonymous local AI translation");
+      check("无 Key 的翻译请求不携带 Authorization", !requests.at(-1).headers.Authorization);
+      aiResponse(requests.at(-1), "无 Key 译文");
+      await flush();
+      check("无 Key 的本地 AI 翻译成功", !translated(noKey).hidden);
+      dispatchEvent(new Event("pagehide"));
+      check("AI 持久化缓存不含 Key，且区分思考等级", !JSON.stringify(storage.get("tiktok-plus:dict-chrome-ex:v1")).includes("test-only-key") && storage.get("tiktok-plus:dict-chrome-ex:v1").some(([key]) => key.includes("ai:v1") && key.includes("high")));
+      const reloadFrame = document.createElement("iframe");
+      reloadFrame.hidden = true;
+      document.body.append(reloadFrame);
+      const reloaded = reloadFrame.contentWindow;
+      reloaded.GM_getValue = window.GM_getValue;
+      reloaded.GM_setValue = window.GM_setValue;
+      reloaded.GM_xmlhttpRequest = window.GM_xmlhttpRequest;
+      reloaded.GM_registerMenuCommand = () => {};
+      reloadFrame.contentDocument.body.innerHTML = '<article><span data-e2e="comment-level-1">Persisted AI settings after reload</span></article>';
+      const reloadScript = reloadFrame.contentDocument.createElement("script");
+      const loaded = new Promise((resolve, reject) => { reloadScript.onload = resolve; reloadScript.onerror = reject; });
+      reloadScript.src = new URL("../tiktok_plus.js?v=1.6.0", location.href).href;
+      reloadFrame.contentDocument.body.append(reloadScript);
+      await loaded;
+      reloadFrame.contentDocument.querySelector(".tiktok-plus-translate-button").click();
+      await flush();
+      check("新页面加载已保存的服务、接口和模型", requests.at(-1).url.endsWith("/responses") && JSON.parse(requests.at(-1).data).model === "local-model");
+      aiResponse(requests.at(-1), "刷新后译文");
+      await flush();
+      check("新页面使用保存的配置完成翻译", reloadFrame.contentDocument.querySelector(".tiktok-plus-comment-translation").textContent === "刷新后译文！");
+      reloadFrame.remove();
+
+      list.replaceChildren();
+      const aiBatch = Array.from({ length: 4 }, (_, index) => makeComment("AI bulk comment " + index, list));
+      await flush();
+      const aiBulkStart = requests.length;
+      bulkButton().click();
+      await until(() => requests.length === aiBulkStart + 2);
+      check("AI 批量翻译同样遵守两个并发", bulkButton().textContent === "全部查看原文" && requests.length === aiBulkStart + 2);
+      buttonFor(aiBatch[3]).click();
+      aiResponse(requests[aiBulkStart], "AI 批量首条");
+      await until(() => requests.length === aiBulkStart + 3);
+      check("AI 批量执行中手动任务优先", JSON.parse(requests.at(-1).data).input === aiBatch[3].textContent);
+      const aiAnswered = new Set([aiBulkStart]);
+      for (let n = 0; n < 30; n++) {
+        for (let i = aiBulkStart; i < requests.length; i++) {
+          if (aiAnswered.has(i)) continue;
+          aiAnswered.add(i);
+          aiResponse(requests[i], "AI 批量译文 " + i);
+        }
+        await wait(20);
+        if (aiBatch.every(comment => !translated(comment).hidden)) break;
+      }
+      check("AI 批量评论全部完成", aiBatch.every(comment => !translated(comment).hidden));
+      const aiReply = makeComment("AI dynamically expanded reply", list, 2);
+      await until(() => requests.some(request => request.data && JSON.parse(request.data).input === aiReply.textContent));
+      aiResponse(requests.at(-1), "AI 动态回复");
+      await flush();
+      check("AI 自动翻译新加载的回复", !translated(aiReply).hidden);
+      bulkButton().click();
+      await configure({ provider: "google" });
+      const googleStart = requests.length;
+      const oldGoogle = await aiComment("Previously translated");
+      check("切回 Google 仍可复用原有持久化缓存", requests.length === googleStart && translated(oldGoogle).textContent === "已有缓存译文");
+      check("切换设置后自动翻译保持关闭", bulkButton().textContent === "翻译全部");
+      const settingsEntry = panel.querySelectorAll(".tiktok-plus-bulk-controls button")[1];
+      settingsEntry.focus();
+      settingsEntry.click();
+      dialog = document.querySelector(".tiktok-plus-settings");
+      check("评论标题旁的设置入口可用", !!dialog?.open);
+      dialog.querySelector('[data-action="cancel"]').click();
+      await until(() => !document.querySelector(".tiktok-plus-settings"));
+      check("关闭设置恢复入口焦点", document.activeElement === settingsEntry);
+      key(document.body, "KeyF", "f");
+      await frames();
+      settingsEntry.click();
+      dialog = document.querySelector(".tiktok-plus-settings");
+      check("影院全屏中设置弹窗仍可见", document.fullscreenElement === document.documentElement && dialog.matches(":modal") && dialog.getBoundingClientRect().width > 0);
+      const fullscreenBeforeSettingsKey = fullscreenCalls.length;
+      const settingsSpace = key(dialog.querySelector('[data-action="cancel"]'), "Space", " ");
+      check("设置按钮的 Space 不被视频快捷键拦截", !settingsSpace.defaultPrevented && fullscreenCalls.length === fullscreenBeforeSettingsKey);
+      dialog.querySelector('[data-action="cancel"]').click();
+      await until(() => !document.querySelector(".tiktok-plus-settings"));
+      key(document.body, "KeyF", "f");
+      await frames();
       output.textContent = "通过 " + passed.length + " 项检查\n\n" + passed.join("\n");
     } catch (error) {
       output.textContent = "失败：" + error.message + "\n\n" + passed.join("\n");
